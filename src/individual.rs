@@ -10,15 +10,19 @@ use crate::class::Class;
 impl Class {
     #[inline(always)]
     pub fn allocate(self) -> Option<NonNull<c_void>> {
-        let layout = self.info().layout;
+        let info = self.info();
+        let layout = info.layout;
+        let offset = info.offset;
 
-        NonNull::new(unsafe { System.alloc(layout) } as *mut c_void)
+        NonNull::new(unsafe { System.alloc(layout) as *mut u8 }.wrapping_add(offset) as *mut c_void)
     }
 
     #[inline(always)]
     pub fn release(self, block: NonNull<c_void>) {
-        let ptr = block.as_ptr() as *mut u8;
-        let layout = self.info().layout;
+        let info = self.info();
+        let layout = info.layout;
+        let offset = info.offset;
+        let ptr = (block.as_ptr() as *mut u8).wrapping_sub(offset);
 
         unsafe {
             System.dealloc(ptr, layout);
