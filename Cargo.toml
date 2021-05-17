@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 lazy_static = "1"
+smallvec = "1"
 
 [dev-dependencies]
 proptest = "1"
