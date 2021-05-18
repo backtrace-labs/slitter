@@ -1,6 +1,7 @@
 mod cache;
 mod class;
 mod individual;
+mod linear_ref;
 
 use std::ffi::c_void;
 use std::ptr::NonNull;

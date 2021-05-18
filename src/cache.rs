@@ -2,16 +2,15 @@
 //! cache.
 use smallvec::SmallVec;
 use std::cell::RefCell;
-use std::ffi::c_void;
 use std::num::NonZeroU32;
-use std::ptr::NonNull;
 
 use crate::class::ClassInfo;
+use crate::linear_ref::LinearRef;
 use crate::Class;
 
 /// For each allocation class, we cache up to one allocation.
 struct ClassCache {
-    slot: Option<NonNull<c_void>>,
+    slot: Option<LinearRef>,
 
     // The `info` field is only `None` for the dummy entry we keep
     // around for the invalid "0" class id.
@@ -34,17 +33,23 @@ struct Cache {
 thread_local!(static CACHE: RefCell<Cache> = RefCell::new(Cache::new()));
 
 #[inline(always)]
-pub fn allocate(class: Class) -> Option<NonNull<c_void>> {
+pub fn allocate(class: Class) -> Option<LinearRef> {
     CACHE
         .try_with(|cache| cache.borrow_mut().allocate(class))
         .unwrap_or_else(|_| class.info().allocate_slow())
 }
 
 #[inline(always)]
-pub fn release(class: Class, block: NonNull<c_void>) {
+pub fn release(class: Class, block: LinearRef) {
+    let mut cell = Some(block);
+
     CACHE
-        .try_with(|cache| cache.borrow_mut().release(class, block))
-        .unwrap_or_else(|_| class.info().release_slow(block))
+        .try_with(|cache| cache.borrow_mut().release(class, cell.take().unwrap()))
+        .unwrap_or_else(|_| {
+            if let Some(alloc) = cell {
+                class.info().release_slow(alloc)
+            }
+        })
 }
 
 impl Drop for Cache {
@@ -92,7 +97,7 @@ impl Cache {
     /// the cache if possible, and hits the Class(Info)'s slow path
     /// otherwise.
     #[inline(always)]
-    fn allocate(&mut self, class: Class) -> Option<NonNull<c_void>> {
+    fn allocate(&mut self, class: Class) -> Option<LinearRef> {
         let index = class.id().get() as usize;
 
         if self.per_class.len() <= index {
@@ -110,7 +115,7 @@ impl Cache {
     /// Pushes to the cache if possible, and hits the Class(Info)'s
     /// slow path otherwise.
     #[inline(always)]
-    fn release(&mut self, class: Class, block: NonNull<c_void>) {
+    fn release(&mut self, class: Class, block: LinearRef) {
         let index = class.id().get() as usize;
 
         if self.per_class.len() <= index {
