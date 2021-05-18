@@ -2,6 +2,7 @@ mod cache;
 mod class;
 mod individual;
 mod linear_ref;
+mod magazine;
 
 use std::ffi::c_void;
 use std::ptr::NonNull;

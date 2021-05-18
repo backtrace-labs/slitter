@@ -42,6 +42,10 @@ pub(crate) struct ClassInfo {
     // bytes.  We assign a unique non-zero offset to each class in
     // order to easily detect API misuse.
     pub offset: usize,
+
+    // The Class will allocate and release magazines via this Rack.
+    pub rack: &'static crate::magazine::Rack,
+
     pub id: Class,
 }
 
@@ -110,6 +114,7 @@ impl Class {
             name: config.name,
             layout,
             offset,
+            rack: crate::magazine::get_default_rack(),
             id,
         }));
         classes.push(info);

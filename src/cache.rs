@@ -6,11 +6,13 @@ use std::num::NonZeroU32;
 
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
+use crate::magazine::Magazine;
 use crate::Class;
 
-/// For each allocation class, we cache up to one allocation.
+/// For each allocation class, we cache up to one magazine's worth of
+/// allocations.
 struct ClassCache {
-    slot: Option<LinearRef>,
+    mag: Box<Magazine>,
 
     // The `info` field is only `None` for the dummy entry we keep
     // around for the invalid "0" class id.
@@ -54,12 +56,15 @@ pub fn release(class: Class, block: LinearRef) {
 
 impl Drop for Cache {
     fn drop(&mut self) {
-        for cache in self.per_class.iter_mut() {
-            if let Some(alloc) = cache.slot.take() {
-                cache
-                    .info
-                    .expect("must have class info")
-                    .release_slow(alloc);
+        while let Some(slot) = self.per_class.pop() {
+            let mag = slot.mag;
+
+            if let Some(info) = slot.info {
+                info.release_magazine(mag);
+            } else {
+                // This must be the padding slot at index 0.
+                assert!(self.per_class.is_empty());
+                crate::magazine::get_default_rack().release_empty_magazine(mag);
             }
         }
     }
@@ -84,10 +89,15 @@ impl Cache {
         assert!(max_id <= u32::MAX as usize);
         while self.per_class.len() <= max_id {
             let id = NonZeroU32::new(self.per_class.len() as u32);
-            let slot = ClassCache {
-                slot: None,
-                info: id.and_then(|id| Class::from_id(id).map(|class| class.info())),
+            let info = id.and_then(|id| Class::from_id(id).map(|class| class.info()));
+
+            let mag = if let Some(i) = info {
+                i.allocate_magazine()
+            } else {
+                crate::magazine::get_default_rack().allocate_empty_magazine()
             };
+
+            let slot = ClassCache { mag, info };
 
             self.per_class.push(slot)
         }
@@ -105,10 +115,14 @@ impl Cache {
         }
 
         let entry = &mut self.per_class[index];
+        if let Some(alloc) = entry.mag.get() {
+            return Some(alloc);
+        }
+
         entry
-            .slot
-            .take()
-            .or_else(|| entry.info.expect("must have class info").allocate_slow())
+            .info
+            .expect("must have class info")
+            .refill_magazine(&mut entry.mag)
     }
 
     /// Marks `block`, an allocation for `class`, ready for reuse.
@@ -126,8 +140,11 @@ impl Cache {
         let entry = &mut self.per_class[index];
         // We prefer to cache freshly deallocated objects, for
         // temporal locality.
-        if let Some(old) = entry.slot.replace(block) {
-            entry.info.expect("must have class info").release_slow(old);
+        if let Some(spill) = entry.mag.put(block) {
+            entry
+                .info
+                .expect("must have class info")
+                .clear_magazine(&mut entry.mag, Some(spill));
         }
     }
 }
