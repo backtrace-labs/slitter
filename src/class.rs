@@ -10,6 +10,8 @@ use std::ffi::CStr;
 use std::num::NonZeroU32;
 use std::os::raw::c_char;
 
+use crate::magazine::MagazineStack;
+
 /// External callers interact with slitter allocation classes via this
 /// opaque Class struct.
 #[repr(C)]
@@ -45,6 +47,13 @@ pub(crate) struct ClassInfo {
 
     // The Class will allocate and release magazines via this Rack.
     pub rack: &'static crate::magazine::Rack,
+
+    // Fully populated magazines go in in `full_mags`.
+    pub full_mags: MagazineStack,
+
+    // Partially populated, but non-empty, magazines go in `partial_mags`.
+    // Empty magazines go back to the `Rack`.
+    pub partial_mags: MagazineStack,
 
     pub id: Class,
 }
@@ -115,6 +124,8 @@ impl Class {
             layout,
             offset,
             rack: crate::magazine::get_default_rack(),
+            full_mags: MagazineStack::new(),
+            partial_mags: MagazineStack::new(),
             id,
         }));
         classes.push(info);

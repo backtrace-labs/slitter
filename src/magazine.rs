@@ -3,6 +3,7 @@
 //! "magazines," and are themselves allocated and released by a
 //! "rack."
 use crate::linear_ref::LinearRef;
+use std::sync::Mutex;
 
 const MAGAZINE_SIZE: u32 = 30;
 
@@ -13,6 +14,14 @@ pub struct Magazine {
     // and the remainder are undefined.
     num_allocated: u32,
     allocations: [Option<LinearRef>; MAGAZINE_SIZE as usize],
+
+    // Single linked list linkage.
+    link: Option<Box<Magazine>>,
+}
+
+/// A `MagazineStack` is a single-linked intrusive stack of magazines.
+pub struct MagazineStack {
+    inner: Mutex<Option<Box<Magazine>>>,
 }
 
 /// A `Rack` allocates and recycles empty magazines.
@@ -67,13 +76,28 @@ impl Magazine {
 
         self.num_allocated = count as u32;
     }
+
+    #[inline]
+    fn is_full(&self) -> bool {
+        self.num_allocated == MAGAZINE_SIZE
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.num_allocated == 0
+    }
 }
 
 impl Default for Magazine {
     fn default() -> Self {
         // Proof that Magazine its constituents are FFI-safe.
         #[allow(dead_code)]
-        extern "C" fn unused(_mag: Magazine, _ref: Option<LinearRef>) {}
+        extern "C" fn unused(
+            _mag: Magazine,
+            _ref: Option<LinearRef>,
+            _link: Option<Box<Magazine>>,
+        ) {
+        }
 
         // This is safe, despite using `NonNull`: `Option<NonNull<T>>`
         // has the same layout as `*T`
@@ -82,7 +106,37 @@ impl Default for Magazine {
         // (https://rust-lang.github.io/unsafe-code-guidelines/layout/enums.html#discriminant-elision-on-option-like-enums).
         // We also know that we only run on implementations of C where NULL
         // is all zero bits.
+        //
+        // The same guarantee applies to `Option<Box<T>>`.
         unsafe { std::mem::zeroed() }
+    }
+}
+
+impl MagazineStack {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(None),
+        }
+    }
+
+    fn push(&self, mut mag: Box<Magazine>) {
+        assert!(mag.link.is_none());
+        let mut stack = self.inner.lock().unwrap();
+
+        mag.link = stack.take();
+        *stack = Some(mag)
+    }
+
+    fn pop(&self) -> Option<Box<Magazine>> {
+        let mut stack = self.inner.lock().unwrap();
+
+        if let Some(mut mag) = stack.take() {
+            std::mem::swap(&mut mag.link, &mut *stack);
+            assert!(mag.link.is_none());
+            Some(mag)
+        } else {
+            None
+        }
     }
 }
 
@@ -103,36 +157,67 @@ impl crate::class::ClassInfo {
     /// populated.
     #[inline(never)]
     pub(crate) fn allocate_magazine(&self) -> Box<Magazine> {
-        self.rack.allocate_empty_magazine()
+        self.partial_mags
+            .pop()
+            .or_else(|| self.full_mags.pop())
+            .unwrap_or_else(|| self.rack.allocate_empty_magazine())
     }
 
     /// Attempts to return one allocation and to refill `mag`.
+    ///
+    /// When the return value is not `None` (i.e., not an OOM), `mag`
+    /// is usually non-empty on exit; in the common case, `mag` is
+    /// one allocation (the return value) short of full.
     #[inline(never)]
     pub(crate) fn refill_magazine(&self, mag: &mut Box<Magazine>) -> Option<LinearRef> {
-        let allocated = self.allocate_slow()?;
+        // Try to get a new non-empty magazine.
+        if let Some(mut new_mag) = self.full_mags.pop().or_else(|| self.partial_mags.pop()) {
+            assert!(!new_mag.is_empty());
 
+            let allocated = new_mag.get();
+            std::mem::swap(&mut new_mag, mag);
+            self.release_magazine(new_mag);
+
+            return allocated;
+        }
+
+        let allocated = self.allocate_slow()?;
         mag.populate(|| self.allocate_slow());
         Some(allocated)
     }
 
     /// Acquires ownership of `spilled` and all cached allocations from
     /// the magazine, and removes some allocations from `mag`.
+    ///
+    /// On exit, `spilled` is in a magazine, and `mag` is usually not
+    /// full; in the common case, `mag` only contains `spilled`.
     #[inline(never)]
-    pub(crate) fn clear_magazine(&self, mag: &mut Box<Magazine>, spilled: Option<LinearRef>) {
-        while let Some(block) = mag.get() {
-            self.release_slow(block);
-        }
+    pub(crate) fn clear_magazine(&self, mag: &mut Box<Magazine>, spilled: LinearRef) {
+        // Get a new non-full magazine.
+        let mut new_mag = self
+            .partial_mags
+            .pop()
+            .unwrap_or_else(|| self.rack.allocate_empty_magazine());
 
-        if let Some(block) = spilled {
-            assert_eq!(mag.put(block), None);
-        }
+        assert!(!new_mag.is_full());
+        assert_eq!(new_mag.put(spilled), None);
+
+        std::mem::swap(&mut new_mag, mag);
+        self.release_magazine(new_mag);
     }
 
     /// Acquires ownership of `mag` and its cached allocations.
     #[inline(never)]
-    pub(crate) fn release_magazine(&self, mut mag: Box<Magazine>) {
-        self.clear_magazine(&mut mag, None);
-        self.rack.release_empty_magazine(mag);
+    pub(crate) fn release_magazine(&self, mag: Box<Magazine>) {
+        assert!(mag.link.is_none());
+
+        if mag.is_empty() {
+            self.rack.release_empty_magazine(mag);
+        } else if mag.is_full() {
+            self.full_mags.push(mag);
+        } else {
+            self.partial_mags.push(mag);
+        }
     }
 }
 
@@ -229,4 +314,21 @@ fn magazine_populate() {
     assert_eq!(mag.num_allocated, 0);
 
     rack.release_empty_magazine(mag);
+}
+
+#[test]
+fn magazine_stack_smoke_test() {
+    let rack = get_default_rack();
+    let stack = MagazineStack::new();
+
+    stack.push(rack.allocate_empty_magazine());
+    stack.push(rack.allocate_empty_magazine());
+
+    assert!(stack.pop().is_some());
+
+    stack.push(rack.allocate_empty_magazine());
+    assert!(stack.pop().is_some());
+    assert!(stack.pop().is_some());
+
+    assert!(stack.pop().is_none());
 }

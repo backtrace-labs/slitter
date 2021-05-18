@@ -144,7 +144,7 @@ impl Cache {
             entry
                 .info
                 .expect("must have class info")
-                .clear_magazine(&mut entry.mag, Some(spill));
+                .clear_magazine(&mut entry.mag, spill);
         }
     }
 }
