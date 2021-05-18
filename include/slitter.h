@@ -6,6 +6,9 @@
 /**
  * Each slitter object class is uniquely identified by a non-zero
  * 32-bit integer.
+ *
+ * Passing a zero-initialised `slitter_class` to `slitter_allocate`
+ * or `slitter_release` causes undefined behaviour.
  */
 struct slitter_class {
 	uint32_t id;
@@ -50,6 +53,10 @@ struct slitter_class slitter_class_register(const struct slitter_class_config *)
  * Returns a new allocation for the object class.
  *
  * On error, this function will abort.
+ *
+ * Behaviour is undefined if the `slitter_class` argument is
+ * zero-filled or was otherwise not returned by
+ * `slitter_class_register`.
  */
 void *slitter_allocate(struct slitter_class);
 
@@ -60,5 +67,9 @@ void *slitter_allocate(struct slitter_class);
  * `slitter_alloc`.
  *
  * On error, this function will abort.
+ *
+ * Behaviour is undefined if the `slitter_class` argument is
+ * zero-filled or was otherwise not returned by
+ * `slitter_class_register`.
  */
 void slitter_release(struct slitter_class, void *ptr);

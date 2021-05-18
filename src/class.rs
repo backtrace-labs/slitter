@@ -7,6 +7,7 @@
 //! rely on type stability.
 use std::alloc::Layout;
 use std::ffi::CStr;
+use std::num::NonZeroU32;
 use std::os::raw::c_char;
 
 /// External callers interact with slitter allocation classes via this
@@ -14,7 +15,7 @@ use std::os::raw::c_char;
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct Class {
-    id: u32,
+    id: NonZeroU32,
 }
 
 /// When created, a class is configured with an object size, and an
@@ -88,7 +89,9 @@ impl Class {
             return Err("too many slitter allocation classes");
         }
 
-        let id = Class { id: next_id as u32 };
+        let id = Class {
+            id: NonZeroU32::new(next_id as u32).expect("next_id is positive"),
+        };
 
         // This shouldn't be hard to fix, but we rely on this
         // constraint to simplify the header-insertion logic below.
@@ -113,28 +116,25 @@ impl Class {
         Ok(id)
     }
 
-    pub fn from_id(id: u32) -> Option<Class> {
+    pub fn from_id(id: NonZeroU32) -> Option<Class> {
         let guard = CLASSES.lock().unwrap();
-        if id as usize <= guard.len() {
+        if id.get() as usize <= guard.len() {
             Some(Class { id })
         } else {
             None
         }
     }
 
-    pub(crate) fn id(self) -> u32 {
+    pub(crate) fn id(self) -> NonZeroU32 {
         self.id
     }
 
     /// Returns the global `ClassInfo` for this `Class`.
     pub(crate) fn info(self) -> &'static ClassInfo {
-        // We never allocate a zero id.
-        assert!(self.id > 0);
-
         let guard = CLASSES.lock().unwrap();
 
         (*guard)
-            .get(self.id as usize - 1)
+            .get(self.id.get() as usize - 1)
             .expect("Class structs are only build for valid ids")
     }
 }

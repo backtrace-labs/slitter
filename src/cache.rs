@@ -3,6 +3,7 @@
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::num::NonZeroU32;
 use std::ptr::NonNull;
 
 use crate::Class;
@@ -45,9 +46,11 @@ impl Drop for Cache {
     fn drop(&mut self) {
         for (index, cache) in self.per_class.iter_mut().enumerate() {
             if let Some(alloc) = cache.slot.take() {
-                Class::from_id(index as u32)
-                    .expect("class must exist")
-                    .release_slow(alloc);
+                Class::from_id(
+                    NonZeroU32::new(index as u32).expect("populated index must be positive"),
+                )
+                .expect("class must exist")
+                .release_slow(alloc);
             }
         }
     }
@@ -78,7 +81,7 @@ impl Cache {
     /// the cache if possible, and hits the class's slow path otherwise.
     #[inline(always)]
     fn allocate(&mut self, class: Class) -> Option<NonNull<c_void>> {
-        let index = class.id() as usize;
+        let index = class.id().get() as usize;
 
         if self.per_class.len() <= index {
             self.grow();
@@ -95,7 +98,7 @@ impl Cache {
     /// path otherwise.
     #[inline(always)]
     fn release(&mut self, class: Class, block: NonNull<c_void>) {
-        let index = class.id() as usize;
+        let index = class.id().get() as usize;
 
         if self.per_class.len() <= index {
             assert!(index < u32::MAX as usize);
