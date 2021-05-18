@@ -6,11 +6,16 @@ use std::ffi::c_void;
 use std::num::NonZeroU32;
 use std::ptr::NonNull;
 
+use crate::class::ClassInfo;
 use crate::Class;
 
 /// For each allocation class, we cache up to one allocation.
 struct ClassCache {
     slot: Option<NonNull<c_void>>,
+
+    // The `info` field is only `None` for the dummy entry we keep
+    // around for the invalid "0" class id.
+    info: Option<&'static ClassInfo>,
 }
 
 /// Inline the cache array for up to this many allocation classes.
@@ -32,25 +37,24 @@ thread_local!(static CACHE: RefCell<Cache> = RefCell::new(Cache::new()));
 pub fn allocate(class: Class) -> Option<NonNull<c_void>> {
     CACHE
         .try_with(|cache| cache.borrow_mut().allocate(class))
-        .unwrap_or_else(|_| class.allocate_slow())
+        .unwrap_or_else(|_| class.info().allocate_slow())
 }
 
 #[inline(always)]
 pub fn release(class: Class, block: NonNull<c_void>) {
     CACHE
         .try_with(|cache| cache.borrow_mut().release(class, block))
-        .unwrap_or_else(|_| class.release_slow(block))
+        .unwrap_or_else(|_| class.info().release_slow(block))
 }
 
 impl Drop for Cache {
     fn drop(&mut self) {
-        for (index, cache) in self.per_class.iter_mut().enumerate() {
+        for cache in self.per_class.iter_mut() {
             if let Some(alloc) = cache.slot.take() {
-                Class::from_id(
-                    NonZeroU32::new(index as u32).expect("populated index must be positive"),
-                )
-                .expect("class must exist")
-                .release_slow(alloc);
+                cache
+                    .info
+                    .expect("must have class info")
+                    .release_slow(alloc);
             }
         }
     }
@@ -73,12 +77,20 @@ impl Cache {
         }
 
         assert!(max_id <= u32::MAX as usize);
-        self.per_class
-            .resize_with(max_id + 1, || ClassCache { slot: None });
+        while self.per_class.len() <= max_id {
+            let id = NonZeroU32::new(self.per_class.len() as u32);
+            let slot = ClassCache {
+                slot: None,
+                info: id.and_then(|id| Class::from_id(id).map(|class| class.info())),
+            };
+
+            self.per_class.push(slot)
+        }
     }
 
     /// Attempts to return an allocation for `class`.  Consumes from
-    /// the cache if possible, and hits the class's slow path otherwise.
+    /// the cache if possible, and hits the Class(Info)'s slow path
+    /// otherwise.
     #[inline(always)]
     fn allocate(&mut self, class: Class) -> Option<NonNull<c_void>> {
         let index = class.id().get() as usize;
@@ -87,15 +99,16 @@ impl Cache {
             self.grow();
         }
 
-        self.per_class[index]
+        let entry = &mut self.per_class[index];
+        entry
             .slot
             .take()
-            .or_else(|| class.allocate_slow())
+            .or_else(|| entry.info.expect("must have class info").allocate_slow())
     }
 
     /// Marks `block`, an allocation for `class`, ready for reuse.
-    /// Pushes to the cache if possible, and hits the class's slow
-    /// path otherwise.
+    /// Pushes to the cache if possible, and hits the Class(Info)'s
+    /// slow path otherwise.
     #[inline(always)]
     fn release(&mut self, class: Class, block: NonNull<c_void>) {
         let index = class.id().get() as usize;
@@ -105,10 +118,11 @@ impl Cache {
             self.grow();
         }
 
+        let entry = &mut self.per_class[index];
         // We prefer to cache freshly deallocated objects, for
         // temporal locality.
-        if let Some(old) = self.per_class[index].slot.replace(block) {
-            class.release_slow(old);
+        if let Some(old) = entry.slot.replace(block) {
+            entry.info.expect("must have class info").release_slow(old);
         }
     }
 }
