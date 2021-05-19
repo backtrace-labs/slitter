@@ -7,6 +7,7 @@ use crate::cache;
 use crate::class::Class;
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
+use crate::press;
 
 impl Class {
     #[inline(always)]
@@ -16,6 +17,8 @@ impl Class {
 
     #[inline(always)]
     pub fn release(self, block: NonNull<c_void>) {
+        press::check_allocation(self, block.as_ptr() as usize)
+            .expect("deallocated address should match allocation class");
         cache::release(self, LinearRef::new(block));
     }
 }

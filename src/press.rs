@@ -108,6 +108,16 @@ pub struct Press {
     class: Class,
 }
 
+impl ChunkMetadata {
+    /// Maps a Press-allocated address to its metadata.
+    pub fn from_allocation_address(address: usize) -> *mut ChunkMetadata {
+        let base = address - (address % DATA_ALIGNMENT);
+        let meta = base - GUARD_PAGE_SIZE - METADATA_PAGE_SIZE;
+
+        meta as *mut ChunkMetadata
+    }
+}
+
 impl AllocatedChunk {
     /// Attempts to carve out a chunk + metadata in `[base, base + size)`.
     pub fn new(base: NonZeroUsize, size: usize) -> Result<AllocatedChunk, &'static str> {
@@ -236,6 +246,15 @@ impl AllocatedChunk {
             "self: {:?}",
             self
         );
+
+        assert_eq!(
+            ChunkMetadata::from_allocation_address(self.data as usize),
+            self.meta
+        );
+        assert_eq!(
+            ChunkMetadata::from_allocation_address(self.data as usize + (DATA_ALIGNMENT - 1)),
+            self.meta
+        );
     }
 
     /// Attempts to allocate the chunk, and calls `f` if that succeeds.
@@ -307,6 +326,23 @@ impl AllocatedChunk {
 
         release(self.base.get(), self.bottom_slop_end)?;
         release(self.top_slop_begin, self.top.get())
+    }
+}
+
+/// Returns Ok if the allocation `address` might have come from a `Press` for `class`.
+///
+/// # Errors
+///
+/// Returns Err if the address definitely did not come from that `class`.
+#[inline]
+pub fn check_allocation(class: Class, address: usize) -> Result<(), &'static str> {
+    let meta_ptr = ChunkMetadata::from_allocation_address(address);
+
+    let meta = unsafe { meta_ptr.as_mut() }.ok_or("Derived a bad metadata address")?;
+    if meta.class_id != Some(class.id()) {
+        Err("Incorrect class id")
+    } else {
+        Ok(())
     }
 }
 
