@@ -23,13 +23,7 @@ impl Class {
 impl ClassInfo {
     #[inline(never)]
     pub(crate) fn allocate_slow(&self) -> Option<LinearRef> {
-        let offset = self.offset;
-
-        let allocated = self.press.allocate_one_object()?;
-
-        Some(LinearRef::new(NonNull::new(
-            (allocated.convert_to_non_null().as_ptr() as usize).wrapping_add(offset) as *mut c_void,
-        )?))
+        self.press.allocate_one_object()
     }
 
     #[inline(never)]

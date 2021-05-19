@@ -41,11 +41,6 @@ pub(crate) struct ClassInfo {
     pub name: Option<String>,
     pub layout: Layout,
 
-    // Each allocation for this `ClassInfo` has a header of `offset`
-    // bytes.  We assign a unique non-zero offset to each class in
-    // order to easily detect API misuse.
-    pub offset: usize,
-
     // The Class will allocate and release magazines via this Rack.
     pub rack: &'static crate::magazine::Rack,
 
@@ -118,19 +113,13 @@ impl Class {
             return Err("slitter only supports 8-byte aligned allocations");
         }
 
-        let offset = next_id * 8;
-        let (layout, _) = Layout::from_size_align(offset, /*align=*/ 8)
-            .and_then(|header| header.extend(config.layout))
-            .map_err(|_| "failed to create extended layout")?;
-
         let info = Box::leak(Box::new(ClassInfo {
             name: config.name,
-            layout,
-            offset,
+            layout: config.layout,
             rack: crate::magazine::get_default_rack(),
             full_mags: MagazineStack::new(),
             partial_mags: MagazineStack::new(),
-            press: Press::new(layout),
+            press: Press::new(config.layout),
             id,
         }));
         classes.push(info);
