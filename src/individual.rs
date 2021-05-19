@@ -40,12 +40,10 @@ impl ClassInfo {
 
     #[inline(never)]
     pub(crate) fn release_slow(&self, block: LinearRef) {
-        let layout = self.layout;
-        let offset = self.offset;
-        let ptr = (block.convert_to_non_null().as_ptr() as *mut u8).wrapping_sub(offset);
+        let mut mag = self.allocate_non_full_magazine();
 
-        unsafe {
-            System.dealloc(ptr, layout);
-        }
+        // Deallocation must succeed.
+        assert_eq!(mag.put(block), None);
+        self.release_magazine(mag);
     }
 }

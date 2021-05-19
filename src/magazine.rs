@@ -163,6 +163,14 @@ impl crate::class::ClassInfo {
             .unwrap_or_else(|| self.rack.allocate_empty_magazine())
     }
 
+    /// Returns a magazine; it may be partially populated or empty.
+    #[inline(never)]
+    pub(crate) fn allocate_non_full_magazine(&self) -> Box<Magazine> {
+        self.partial_mags
+            .pop()
+            .unwrap_or_else(|| self.rack.allocate_empty_magazine())
+    }
+
     /// Attempts to return one allocation and to refill `mag`.
     ///
     /// When the return value is not `None` (i.e., not an OOM), `mag`
