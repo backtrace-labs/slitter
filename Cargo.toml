@@ -8,5 +8,8 @@ edition = "2018"
 lazy_static = "1"
 smallvec = "1"
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 proptest = "1"

@@ -119,7 +119,7 @@ impl Class {
             rack: crate::magazine::get_default_rack(),
             full_mags: MagazineStack::new(),
             partial_mags: MagazineStack::new(),
-            press: Press::new(config.layout),
+            press: Press::new(id, config.layout)?,
             id,
         }));
         classes.push(info);
