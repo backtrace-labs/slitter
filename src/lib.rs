@@ -3,6 +3,7 @@ mod class;
 mod individual;
 mod linear_ref;
 mod magazine;
+mod press;
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
