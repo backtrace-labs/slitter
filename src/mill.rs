@@ -1,4 +1,4 @@
-//! A `Mill` hands out parcels of chunk data and associated chunk
+//! A `Mill` hands out parcels of span data and associated span
 //! metadata to `Press`es.  We expect multiple `Press`es to share
 //! the same `Mill`, and `Press`es belong to `ClassInfo`, and are
 //! thus immortal; `Mill`s are also immortal.
@@ -8,16 +8,16 @@ use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicUsize;
 
-/// Data chunks are naturally aligned to their chunk size.
+/// Data spans are naturally aligned to their span size.
 const DATA_ALIGNMENT: usize = 2 << 20;
 const GUARD_PAGE_SIZE: usize = 4096;
 const METADATA_PAGE_SIZE: usize = 4096;
 
-/// Maximum size in bytes we can service for a single allocation.
-pub const MAX_DATA_SIZE: usize = DATA_ALIGNMENT;
+/// Maximum size in bytes we can service for a single span.
+pub const MAX_SPAN_SIZE: usize = DATA_ALIGNMENT;
 
 /// Grabbing an address space of at least this many bytes should be
-/// enough to find a spot for the chunk + its metadata.
+/// enough to find a spot for the span + its metadata.
 ///
 /// If the first aligned region has enough of a prefix for 2 guard
 /// pages and the metadata, we're good.
@@ -28,7 +28,7 @@ pub const MAX_DATA_SIZE: usize = DATA_ALIGNMENT;
 ///
 /// The code in this module, including this constant, assumes that
 /// `DATA_ALIGNMENT` is greater than the total amount of bytes we wish
-/// to keep around the data chunk.
+/// to keep around the data span.
 const MAPPED_REGION_SIZE: usize = 2 * DATA_ALIGNMENT + 3 * GUARD_PAGE_SIZE + METADATA_PAGE_SIZE;
 
 const PREFIX_SIZE: usize = GUARD_PAGE_SIZE + METADATA_PAGE_SIZE + GUARD_PAGE_SIZE;
@@ -84,29 +84,29 @@ pub trait Mapper: std::fmt::Debug + Sync {
 
 #[derive(Debug)]
 #[repr(C)]
-pub struct ChunkMetadata {
-    /// The id of the class for all allocations in this chunk.  We
+pub struct SpanMetadata {
+    /// The id of the class for all allocations in this span.  We
     /// don't use a `Class` because 0-initialised data must be valid.
     pub(crate) class_id: Option<NonZeroU32>,
-    /// Number of elements available in the chunk
+    /// Number of elements available in the span
     pub(crate) bump_limit: u32,
-    /// Number of elements allocated in the chunk
+    /// Number of elements allocated in the span
     pub(crate) bump_ptr: AtomicUsize,
-    /// Start address for the chunk.
-    pub(crate) chunk_begin: usize,
+    /// Start address for the span.
+    pub(crate) span_begin: usize,
 }
 
 #[allow(unused)]
 extern "C" {
-    fn unused_chunk_metadata_is_zero_safe() -> ChunkMetadata;
+    fn unused_span_metadata_is_zero_safe() -> SpanMetadata;
 }
 
-/// A `MilledRange` represents a newly allocated chunk of data, and
+/// A `MilledRange` represents a newly allocated span of data, and
 /// associated metadata struct.
 #[derive(Debug)]
 pub struct MilledRange {
     // The meta object is initially zero-filled.
-    pub meta: &'static mut ChunkMetadata,
+    pub meta: &'static mut SpanMetadata,
     pub data: *mut c_void,
     pub data_size: usize,
 }
@@ -132,13 +132,13 @@ pub fn get_default_mill() -> &'static Mill {
     &DEFAULT_MILL
 }
 
-impl ChunkMetadata {
+impl SpanMetadata {
     /// Maps a Press-allocated address to its metadata.
-    pub fn from_allocation_address(address: usize) -> *mut ChunkMetadata {
+    pub fn from_allocation_address(address: usize) -> *mut SpanMetadata {
         let base = address - (address % DATA_ALIGNMENT);
         let meta = base - GUARD_PAGE_SIZE - METADATA_PAGE_SIZE;
 
-        meta as *mut ChunkMetadata
+        meta as *mut SpanMetadata
     }
 }
 
@@ -167,14 +167,14 @@ struct AllocatedChunk<'a> {
     base: NonZeroUsize,     // page-aligned
     top: NonZeroUsize,      // page-aligned
     bottom_slop_end: usize, // page-aligned
-    pub meta: *mut ChunkMetadata,
+    pub meta: *mut SpanMetadata,
     pub data: *mut c_void,
     pub data_end: usize,
     top_slop_begin: usize, // page-aligned
 }
 
 impl<'a> AllocatedChunk<'a> {
-    /// Attempts to carve out a chunk + metadata from a new range of
+    /// Attempts to carve out a span + metadata from a new range of
     /// address space returned by `mapper`.
     ///
     /// # Errors
@@ -199,7 +199,7 @@ impl<'a> AllocatedChunk<'a> {
         .expect("mapper returned a bad region"))
     }
 
-    /// Attempts to carve out a chunk + metadata in `[base, base + size)`.
+    /// Attempts to carve out a span + metadata in `[base, base + size)`.
     fn new_from_range(
         mapper: &'a dyn Mapper,
         base: NonZeroUsize,
@@ -209,7 +209,7 @@ impl<'a> AllocatedChunk<'a> {
 
         // Try to find the data address.  It must be aligned to 2MB,
         // and have room for the metadata + guard pages before/after
-        // the data chunk.
+        // the data span.
         if (base.get() % page_size) != 0 {
             return Err("base is incorrectly aligned");
         }
@@ -234,7 +234,7 @@ impl<'a> AllocatedChunk<'a> {
 
         assert!(data >= base.get());
         // If there's not enough room for the prefix, go forward by
-        // another chunk size.
+        // another span size.
         if (data - base.get()) < PREFIX_SIZE {
             data = data.checked_add(DATA_ALIGNMENT).ok_or("overflow in bump")?;
         }
@@ -245,7 +245,7 @@ impl<'a> AllocatedChunk<'a> {
         bottom_slop_end -= bottom_slop_end % page_size;
 
         // This addition is safe for the same reason.
-        let meta = bottom_slop_end.checked_add(GUARD_PAGE_SIZE).unwrap() as *mut ChunkMetadata;
+        let meta = bottom_slop_end.checked_add(GUARD_PAGE_SIZE).unwrap() as *mut SpanMetadata;
 
         let data_end = data
             .checked_add(DATA_ALIGNMENT)
@@ -330,11 +330,11 @@ impl<'a> AllocatedChunk<'a> {
         );
 
         assert_eq!(
-            ChunkMetadata::from_allocation_address(self.data as usize),
+            SpanMetadata::from_allocation_address(self.data as usize),
             self.meta
         );
         assert_eq!(
-            ChunkMetadata::from_allocation_address(self.data as usize + (DATA_ALIGNMENT - 1)),
+            SpanMetadata::from_allocation_address(self.data as usize + (DATA_ALIGNMENT - 1)),
             self.meta
         );
     }
@@ -433,13 +433,13 @@ impl Mill {
     /// # Errors
     ///
     /// Returns `Err` on mapping failures (OOM-like conditions).
-    pub fn get_chunk(&self) -> Result<MilledRange, i32> {
+    pub fn get_span(&self) -> Result<MilledRange, i32> {
         AllocatedChunk::new(self.mapper)?.call_with_chunk(|chunk| {
             let meta = unsafe { chunk.meta.as_mut() }.expect("must be valid");
             Ok(MilledRange {
                 meta,
                 data: chunk.data,
-                data_size: MAX_DATA_SIZE,
+                data_size: MAX_SPAN_SIZE,
             })
         })
     }
@@ -475,7 +475,7 @@ impl Mapper for DefaultMapper {
 }
 
 #[test]
-fn test_allocated_chunk_valid() {
+fn test_allocated_span_valid() {
     // Check that we can always construct an AllocatedChunk when we
     // pass in large enough regions.
     let mapper = DefaultMapper {};
