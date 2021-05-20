@@ -2,7 +2,6 @@
 //! metadata to `Press`es.  We expect multiple `Press`es to share
 //! the same `Mill`, and `Press`es belong to `ClassInfo`, and are
 //! thus immortal; `Mill`s are also immortal.
-use crate::map;
 use std::ffi::c_void;
 use std::num::NonZeroU32;
 use std::num::NonZeroUsize;
@@ -31,6 +30,52 @@ pub const MAX_DATA_SIZE: usize = DATA_ALIGNMENT;
 /// `DATA_ALIGNMENT` is greater than the total amount of bytes we wish
 /// to keep around the data chunk.
 const MAPPED_REGION_SIZE: usize = 2 * DATA_ALIGNMENT + 3 * GUARD_PAGE_SIZE + METADATA_PAGE_SIZE;
+
+const PREFIX_SIZE: usize = GUARD_PAGE_SIZE + METADATA_PAGE_SIZE + GUARD_PAGE_SIZE;
+const SUFFIX_SIZE: usize = GUARD_PAGE_SIZE;
+
+/// `Mill` are parameterised on `Mapper`s that are responsible for
+/// acquiring address space from the operating system.
+pub trait Mapper: std::fmt::Debug + Sync {
+    /// Returns the mapping granularity for this mapper.  All calls
+    /// into the mapper will align addresses and sizes to that page
+    /// size.
+    ///
+    /// The page size must be constant for the lifetime of a process.
+    fn page_size(&self) -> usize;
+
+    /// Attempts to reserve a range of address space.  On success,
+    /// returns the address of the first byte in the reserved range,
+    /// and the number of bytes actually reserved.  Both values
+    /// should be aligned to the `page_size()`.
+    ///
+    /// Any page-aligned allocation of `desired_size` bytes will
+    /// suffice to satisfy the caller.  However, the mapper may also
+    /// try to do something smarter, knowing that its caller wants an
+    /// range of `data_size` bytes aligned to `data_size`, with
+    /// `prefix` bytes before that range, and `suffix` bytes after.
+    ///
+    /// The `data_size`, `prefix`, and `suffix` values may
+    /// be misaligned with respect to the page size.
+    fn reserve(
+        &self,
+        desired_size: usize,
+        data_size: usize,
+        prefix: usize,
+        suffix: usize,
+    ) -> Result<(NonNull<c_void>, usize), i32>;
+
+    /// Releases a page-aligned range that was previously obtained
+    /// with a single call to `reserve`.  The `release`d range is
+    /// always a subset of a range that was returned by a single
+    /// `reserve` call.
+    fn release(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
+
+    /// Prepares a page-aligned range for read and write access.
+    /// The `allocate`d range is always a subset of a range that was
+    /// returned by a single `reserve` call.
+    fn allocate(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
+}
 
 #[derive(Debug)]
 #[repr(C)]
@@ -63,13 +108,20 @@ pub struct MilledRange {
 
 #[derive(Debug)]
 pub struct Mill {
-    // No state for now.
+    mapper: &'static dyn Mapper,
 }
+
+#[derive(Debug)]
+struct DefaultMapper {}
 
 /// Returns a reference to the shared default `Mill`.
 pub fn get_default_mill() -> &'static Mill {
     lazy_static::lazy_static! {
-    static ref DEFAULT_MILL: &'static Mill = Box::leak(Box::new(Mill{}));
+    static ref DEFAULT_MILL: &'static Mill = {
+        let default_mapper = Box::leak(Box::new(DefaultMapper{}));
+
+        Box::leak(Box::new(Mill{ mapper: default_mapper }))
+    };
     };
 
     &DEFAULT_MILL
@@ -104,7 +156,8 @@ impl ChunkMetadata {
 ///
 /// On failure, we must instead release everything from `base` to `top`.
 #[derive(Debug)]
-struct AllocatedChunk {
+struct AllocatedChunk<'a> {
+    mapper: &'a dyn Mapper,
     // All these `usize` are addresses.
     base: NonZeroUsize,     // page-aligned
     top: NonZeroUsize,      // page-aligned
@@ -115,16 +168,17 @@ struct AllocatedChunk {
     top_slop_begin: usize, // page-aligned
 }
 
-impl AllocatedChunk {
+impl<'a> AllocatedChunk<'a> {
     /// Attempts to carve out a chunk + metadata in `[base, base + size)`.
-    pub fn new(base: NonZeroUsize, size: usize) -> Result<AllocatedChunk, &'static str> {
+    pub fn new(
+        mapper: &'a dyn Mapper,
+        base: NonZeroUsize,
+        size: usize,
+    ) -> Result<AllocatedChunk<'a>, &'static str> {
         // Try to find the data address.  It must be aligned to 2MB,
         // and have room for the metadata + guard pages before/after
         // the data chunk.
-        const PREFIX_SIZE: usize = GUARD_PAGE_SIZE + METADATA_PAGE_SIZE + GUARD_PAGE_SIZE;
-        const SUFFIX_SIZE: usize = GUARD_PAGE_SIZE;
-
-        let page_size = map::page_size();
+        let page_size = mapper.page_size();
 
         if (base.get() % page_size) != 0 {
             return Err("base is incorrectly aligned");
@@ -180,6 +234,7 @@ impl AllocatedChunk {
         }
 
         Ok(AllocatedChunk {
+            mapper,
             base,
             top,
             bottom_slop_end,
@@ -192,7 +247,7 @@ impl AllocatedChunk {
 
     /// Asserts against internal invariants.
     pub fn check_rep(&self) {
-        let page_size = map::page_size();
+        let page_size = self.mapper.page_size();
 
         // Check that [base, top) makes sense.
         assert_eq!(self.base.get() % page_size, 0, "self: {:?}", self);
@@ -274,7 +329,7 @@ impl AllocatedChunk {
 
     /// Releases the region covered by the AllocatedChunk.
     fn release_all(self) -> Result<(), i32> {
-        map::release_region(
+        self.mapper.release(
             NonNull::new(self.base.get() as *mut c_void).expect("must be valid"),
             self.top.get() - self.base.get(),
         )
@@ -284,29 +339,29 @@ impl AllocatedChunk {
     fn allocate(&self) -> Result<(), i32> {
         // Ensures the region containing [begin, begin + size) is
         // backed by memory, by rounding outward.
-        fn rounded_allocate(mut begin: usize, size: usize) -> Result<(), i32> {
+        fn rounded_allocate(mapper: &dyn Mapper, mut begin: usize, size: usize) -> Result<(), i32> {
             let mut top = begin + size;
 
-            let page_size = map::page_size();
+            let page_size = mapper.page_size();
             begin -= begin % page_size;
             if (top % page_size) > 0 {
                 top = page_size * (1 + (top / page_size));
             }
 
-            map::allocate_region(
+            mapper.allocate(
                 NonNull::new(begin as *mut c_void).expect("must be valid"),
                 top - begin,
             )
         }
 
-        rounded_allocate(self.meta as usize, METADATA_PAGE_SIZE)?;
-        rounded_allocate(self.data as usize, DATA_ALIGNMENT)
+        rounded_allocate(self.mapper, self.meta as usize, METADATA_PAGE_SIZE)?;
+        rounded_allocate(self.mapper, self.data as usize, DATA_ALIGNMENT)
     }
 
     /// Releases any slop around the allocated memory.
     fn commit(self) -> Result<(), i32> {
-        fn release(begin: usize, end: usize) -> Result<(), i32> {
-            let page_size = map::page_size();
+        fn release(mapper: &dyn Mapper, begin: usize, end: usize) -> Result<(), i32> {
+            let page_size = mapper.page_size();
 
             assert!(begin <= end);
             if begin == end {
@@ -315,14 +370,14 @@ impl AllocatedChunk {
 
             assert_eq!(begin % page_size, 0);
             assert_eq!(end % page_size, 0);
-            map::release_region(
+            mapper.release(
                 NonNull::new(begin as *mut c_void).expect("must be valid"),
                 end - begin,
             )
         }
 
-        release(self.base.get(), self.bottom_slop_end)?;
-        release(self.top_slop_begin, self.top.get())
+        release(self.mapper, self.base.get(), self.bottom_slop_end)?;
+        release(self.mapper, self.top_slop_begin, self.top.get())
     }
 }
 
@@ -333,15 +388,21 @@ impl Mill {
     ///
     /// Returns `Err` on mapping failures (OOM-like conditions).
     pub fn get_chunk(&self) -> Result<MilledRange, i32> {
-        let page_size = map::page_size();
+        let page_size = self.mapper.page_size();
         let mut size = MAPPED_REGION_SIZE;
         if (size % page_size) > 0 {
             size = page_size * (1 + (size / page_size));
         }
 
-        let region: NonNull<c_void> = map::reserve_region(size)?;
-        let chunk = AllocatedChunk::new(NonZeroUsize::new(region.as_ptr() as usize).unwrap(), size)
-            .expect("Must be able to partition");
+        let (region, actual): (NonNull<c_void>, usize) =
+            self.mapper
+                .reserve(size, DATA_ALIGNMENT, PREFIX_SIZE, SUFFIX_SIZE)?;
+        let chunk = AllocatedChunk::new(
+            self.mapper,
+            NonZeroUsize::new(region.as_ptr() as usize).unwrap(),
+            actual,
+        )
+        .expect("Mapper failed to return a valid region");
 
         chunk.call_with_chunk(|chunk| {
             let meta = unsafe { chunk.meta.as_mut() }.expect("must be valid");
@@ -354,15 +415,41 @@ impl Mill {
     }
 }
 
+impl Mapper for DefaultMapper {
+    fn page_size(&self) -> usize {
+        crate::map::page_size()
+    }
+
+    fn reserve(
+        &self,
+        desired_size: usize,
+        _data_size: usize,
+        _prefix: usize,
+        _suffix: usize,
+    ) -> Result<(NonNull<c_void>, usize), i32> {
+        let region: NonNull<c_void> = crate::map::reserve_region(desired_size)?;
+        Ok((region, desired_size))
+    }
+
+    fn release(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32> {
+        crate::map::release_region(base, size)
+    }
+
+    fn allocate(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32> {
+        crate::map::allocate_region(base, size)
+    }
+}
+
 #[test]
 fn test_allocated_chunk_valid() {
     // Check that we can always construct an AllocatedChunk when we
     // pass in large enough regions.
+    let mapper = DefaultMapper {};
 
     // The test cases below assume that the GUARD_PAGE_SIZE and
     // METADATA_PAGE_SIZE are multiples of the page size.
-    assert_eq!(GUARD_PAGE_SIZE % map::page_size(), 0);
-    assert_eq!(METADATA_PAGE_SIZE % map::page_size(), 0);
+    assert_eq!(GUARD_PAGE_SIZE % mapper.page_size(), 0);
+    assert_eq!(METADATA_PAGE_SIZE % mapper.page_size(), 0);
 
     // We assume the zero page can't be mapped.  See what happens when
     // we get the next page.
@@ -385,6 +472,7 @@ fn test_allocated_chunk_valid() {
     at_end.check_rep();
 
     let aligned = AllocatedChunk::new(
+        &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -392,13 +480,15 @@ fn test_allocated_chunk_valid() {
     aligned.check_rep();
 
     let unaligned = AllocatedChunk::new(
-        NonZeroUsize::new(DATA_ALIGNMENT + map::page_size()).unwrap(),
+        &mapper,
+        NonZeroUsize::new(DATA_ALIGNMENT + mapper.page_size()).unwrap(),
         MAPPED_REGION_SIZE,
     )
     .expect("must construct");
     unaligned.check_rep();
 
     let offset_guard = AllocatedChunk::new(
+        &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - GUARD_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -406,6 +496,7 @@ fn test_allocated_chunk_valid() {
     offset_guard.check_rep();
 
     let offset_meta = AllocatedChunk::new(
+        &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - GUARD_PAGE_SIZE - METADATA_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -413,8 +504,9 @@ fn test_allocated_chunk_valid() {
     offset_meta.check_rep();
 
     let off_by_one = AllocatedChunk::new(
+        &mapper,
         NonZeroUsize::new(
-            DATA_ALIGNMENT - 2 * GUARD_PAGE_SIZE - METADATA_PAGE_SIZE + map::page_size(),
+            DATA_ALIGNMENT - 2 * GUARD_PAGE_SIZE - METADATA_PAGE_SIZE + mapper.page_size(),
         )
         .unwrap(),
         MAPPED_REGION_SIZE,
@@ -423,6 +515,7 @@ fn test_allocated_chunk_valid() {
     off_by_one.check_rep();
 
     let exact_fit = AllocatedChunk::new(
+        &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - 2 * GUARD_PAGE_SIZE - METADATA_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
     )
