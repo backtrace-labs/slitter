@@ -2,19 +2,39 @@
 //! metadata to `Press`es.  We expect multiple `Press`es to share
 //! the same `Mill`, and `Press`es belong to `ClassInfo`, and are
 //! thus immortal; `Mill`s are also immortal.
+//!
+//! Each `Mill` owns a large `Chunk`, and associated range of
+//! metadata, and partitions that chunk into smaller `Span`s.  The
+//! chunk data is a 1 GB range, aligned to 1 GB, and the associated
+//! array of metadata lives at a fixed offset from the beginning of
+//! the chunk.  The layout looks like
+//!
+//! | guard | meta | guard | data ... data | guard |
+//!
+//! where the guard and meta(data) regions are 2 MB each, and the
+//! data is 1 GB, aligned to 1 GB.
+//!
+//! Each chunk is divided 64 K spans of 16 KB each.  Each span is
+//! associated with a metadata object in the parallel flat array that
+//! lives in the metadata range.
 use std::ffi::c_void;
 use std::num::NonZeroU32;
 use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicUsize;
 
-/// Data spans are naturally aligned to their span size.
-const DATA_ALIGNMENT: usize = 2 << 20;
-const GUARD_PAGE_SIZE: usize = 4096;
-const METADATA_PAGE_SIZE: usize = 4096;
+/// Data chunks are naturally aligned to their size, 1GB.
+const DATA_ALIGNMENT: usize = 1 << 30;
+/// We use 2 MB sizes to enable huge pages.  3 guard superpages + 1
+/// metadata superpage per chunk is still less than 1% overhead.
+const GUARD_PAGE_SIZE: usize = 2 << 20;
+const METADATA_PAGE_SIZE: usize = 2 << 20;
+
+/// Spans are aligned to 16 KB, within the chunk.
+const SPAN_ALIGNMENT: usize = 16 << 10;
 
 /// Maximum size in bytes we can service for a single span.
-pub const MAX_SPAN_SIZE: usize = DATA_ALIGNMENT;
+pub const MAX_SPAN_SIZE: usize = SPAN_ALIGNMENT;
 
 /// Grabbing an address space of at least this many bytes should be
 /// enough to find a spot for the span + its metadata.
@@ -33,6 +53,23 @@ const MAPPED_REGION_SIZE: usize = 2 * DATA_ALIGNMENT + 3 * GUARD_PAGE_SIZE + MET
 
 const PREFIX_SIZE: usize = GUARD_PAGE_SIZE + METADATA_PAGE_SIZE + GUARD_PAGE_SIZE;
 const SUFFIX_SIZE: usize = GUARD_PAGE_SIZE;
+
+// The constants are tightly coupled.  Make sure they make sense.
+static_assertions::const_assert_eq!(
+    MAPPED_REGION_SIZE,
+    2 * DATA_ALIGNMENT + PREFIX_SIZE + SUFFIX_SIZE
+);
+
+// We must have enough room in the metadata page for our spans'
+// metadata.  There are `DATA_ALIGNMENT / SPAN_ALIGNMENT` span-aligned
+// regions per data region, and each one needs a `SpanMetadata`.  The
+// corresponding array of `SpanMetadata` must fit in the
+// `METADATA_PAGE_SIZE`.
+static_assertions::const_assert!(
+    DATA_ALIGNMENT / SPAN_ALIGNMENT <= METADATA_PAGE_SIZE / std::mem::size_of::<SpanMetadata>()
+);
+
+static_assertions::const_assert!(std::mem::size_of::<MetaArray>() <= METADATA_PAGE_SIZE);
 
 /// `Mill` are parameterised on `Mapper`s that are responsible for
 /// acquiring address space from the operating system.
@@ -111,9 +148,30 @@ pub struct MilledRange {
     pub data_size: usize,
 }
 
+/// The array of metadata associated with a chunk.
+#[derive(Debug)]
+struct MetaArray {
+    chunk_meta: [SpanMetadata; DATA_ALIGNMENT / SPAN_ALIGNMENT],
+}
+
+#[derive(Debug)]
+struct Chunk {
+    meta: *mut MetaArray,
+    spans: usize,      // address where the chunk's spans start.
+    span_count: usize, // chunk size in in spans
+
+    // Bump pointer to allocate spans
+    next_free_span: usize,
+}
+
+/// We manage the metadata array and the spans in each Chunk to avoid
+/// accidental sharing.  That's why it's safe to `Send` them.
+unsafe impl Send for Chunk {}
+
 #[derive(Debug)]
 pub struct Mill {
     mapper: &'static dyn Mapper,
+    current_chunk: std::sync::Mutex<Option<Chunk>>,
 }
 
 #[derive(Debug)]
@@ -122,11 +180,11 @@ struct DefaultMapper {}
 /// Returns a reference to the shared default `Mill`.
 pub fn get_default_mill() -> &'static Mill {
     lazy_static::lazy_static! {
-    static ref DEFAULT_MILL: &'static Mill = {
-        let default_mapper = Box::leak(Box::new(DefaultMapper{}));
+        static ref DEFAULT_MILL: &'static Mill = {
+            let default_mapper = Box::leak(Box::new(DefaultMapper{}));
 
-        Box::leak(Box::new(Mill{ mapper: default_mapper }))
-    };
+            Box::leak(Box::new(Mill{ mapper: default_mapper, current_chunk: Default::default() }))
+        };
     };
 
     &DEFAULT_MILL
@@ -136,9 +194,10 @@ impl SpanMetadata {
     /// Maps a Press-allocated address to its metadata.
     pub fn from_allocation_address(address: usize) -> *mut SpanMetadata {
         let base = address - (address % DATA_ALIGNMENT);
+        let index = (address - base) / SPAN_ALIGNMENT; // Span id.
         let meta = base - GUARD_PAGE_SIZE - METADATA_PAGE_SIZE;
 
-        meta as *mut SpanMetadata
+        unsafe { (meta as *mut SpanMetadata).add(index) }
     }
 }
 
@@ -167,7 +226,7 @@ struct AllocatedChunk<'a> {
     base: NonZeroUsize,     // page-aligned
     top: NonZeroUsize,      // page-aligned
     bottom_slop_end: usize, // page-aligned
-    pub meta: *mut SpanMetadata,
+    pub meta: *mut MetaArray,
     pub data: *mut c_void,
     pub data_end: usize,
     top_slop_begin: usize, // page-aligned
@@ -245,7 +304,7 @@ impl<'a> AllocatedChunk<'a> {
         bottom_slop_end -= bottom_slop_end % page_size;
 
         // This addition is safe for the same reason.
-        let meta = bottom_slop_end.checked_add(GUARD_PAGE_SIZE).unwrap() as *mut SpanMetadata;
+        let meta = bottom_slop_end.checked_add(GUARD_PAGE_SIZE).unwrap() as *mut MetaArray;
 
         let data_end = data
             .checked_add(DATA_ALIGNMENT)
@@ -331,11 +390,11 @@ impl<'a> AllocatedChunk<'a> {
 
         assert_eq!(
             SpanMetadata::from_allocation_address(self.data as usize),
-            self.meta
+            self.meta as *mut SpanMetadata
         );
         assert_eq!(
             SpanMetadata::from_allocation_address(self.data as usize + (DATA_ALIGNMENT - 1)),
-            self.meta
+            unsafe { (self.meta as *mut SpanMetadata).add(DATA_ALIGNMENT / SPAN_ALIGNMENT - 1) }
         );
     }
 
@@ -428,20 +487,55 @@ impl<'a> AllocatedChunk<'a> {
 }
 
 impl Mill {
+    /// Returns a fresh chunk from `mapper`.
+    fn allocate_chunk(mapper: &dyn Mapper) -> Result<Chunk, i32> {
+        AllocatedChunk::new(mapper)?.call_with_chunk(|chunk| {
+            let meta = unsafe { chunk.meta.as_mut() }.expect("must be valid");
+            Ok(Chunk {
+                meta,
+                spans: chunk.data as usize,
+                span_count: DATA_ALIGNMENT / SPAN_ALIGNMENT,
+                next_free_span: 0,
+            })
+        })
+    }
+
+    /// Attempts to chop a new span from a chunk.
+    fn allocate_span(chunk: &mut Chunk) -> Option<MilledRange> {
+        if chunk.next_free_span >= chunk.span_count {
+            return None;
+        }
+
+        let index = chunk.next_free_span;
+        chunk.next_free_span += 1;
+
+        let meta = unsafe { chunk.meta.as_mut() }.unwrap();
+
+        Some(MilledRange {
+            meta: &mut meta.chunk_meta[index],
+            data: (chunk.spans + index * SPAN_ALIGNMENT) as *mut c_void,
+            data_size: SPAN_ALIGNMENT,
+        })
+    }
+
     /// Attempts to return a fresh range of allocation space.
     ///
     /// # Errors
     ///
     /// Returns `Err` on mapping failures (OOM-like conditions).
     pub fn get_span(&self) -> Result<MilledRange, i32> {
-        AllocatedChunk::new(self.mapper)?.call_with_chunk(|chunk| {
-            let meta = unsafe { chunk.meta.as_mut() }.expect("must be valid");
-            Ok(MilledRange {
-                meta,
-                data: chunk.data,
-                data_size: MAX_SPAN_SIZE,
-            })
-        })
+        let mut chunk_or = self.current_chunk.lock().unwrap();
+
+        if chunk_or.is_none() {
+            *chunk_or = Some(Mill::allocate_chunk(self.mapper)?);
+        }
+
+        if let Some(range) = Mill::allocate_span(chunk_or.as_mut().unwrap()) {
+            return Ok(range);
+        }
+
+        *chunk_or = Some(Mill::allocate_chunk(self.mapper)?);
+        Ok(Mill::allocate_span(chunk_or.as_mut().unwrap()).expect("New chunk must have a span"))
     }
 }
 
