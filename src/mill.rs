@@ -142,8 +142,15 @@ extern "C" {
 /// associated metadata struct.
 #[derive(Debug)]
 pub struct MilledRange {
-    // The meta object is initially zero-filled.
+    /// The meta object is initially zero-filled, and is the first
+    /// SpanMetadata object for the allocated span.
     pub meta: &'static mut SpanMetadata,
+    /// A span may be associated with multiple metadata structs (but
+    /// each SpanMetadata only maps to one span); the trail slice
+    /// contains the remaining metadata structs.  They must be
+    /// initialised so that we can later get the metadata (class id)
+    /// for an allocated object.
+    pub trail: &'static mut [SpanMetadata],
     pub data: *mut c_void,
     pub data_size: usize,
 }
@@ -509,10 +516,15 @@ impl Mill {
         let index = chunk.next_free_span;
         chunk.next_free_span += 1;
 
-        let meta = unsafe { chunk.meta.as_mut() }.unwrap();
+        let meta: &'static mut _ = unsafe { chunk.meta.as_mut() }.unwrap();
+        // Bamboozle the borrow checker... we will pass two mutable
+        // references to the chunk_meta array (and many more that the
+        // checker isn't aware of), but they're all disjoint.
+        let meta2: &'static mut _ = unsafe { chunk.meta.as_mut() }.unwrap();
 
         Some(MilledRange {
             meta: &mut meta.chunk_meta[index],
+            trail: &mut meta2.chunk_meta[index + 1..index + 1],
             data: (chunk.spans + index * SPAN_ALIGNMENT) as *mut c_void,
             data_size: SPAN_ALIGNMENT,
         })

@@ -111,6 +111,11 @@ impl Press {
         meta.bump_ptr = AtomicUsize::new(0);
         meta.span_begin = range.data as usize;
 
+        // Make sure allocations in the trail are properly marked as being ours.
+        for trailing_meta in range.trail {
+            trailing_meta.class_id = Some(self.class.id());
+        }
+
         // Publish the metadata for our fresh span.
         assert_eq!(self.bump.load(Ordering::Relaxed), expected);
         self.bump.store(meta, Ordering::Release);
