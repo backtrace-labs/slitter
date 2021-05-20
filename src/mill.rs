@@ -33,8 +33,19 @@ const METADATA_PAGE_SIZE: usize = 2 << 20;
 /// Spans are aligned to 16 KB, within the chunk.
 const SPAN_ALIGNMENT: usize = 16 << 10;
 
-/// Maximum size in bytes we can service for a single span.
-pub const MAX_SPAN_SIZE: usize = SPAN_ALIGNMENT;
+/// Maximum size in bytes we can service for a single span.  The
+/// higher this value, the more bytes we may lose to fragmentation
+/// when the remaining bytes in a chunk aren't enough.
+///
+/// Setting this to 1/16th of the chunk size means we lose at most
+/// ~6.25% to that source of fragmentation.
+pub const MAX_SPAN_SIZE: usize = DATA_ALIGNMENT / 16;
+
+/// By default, we want to carve our *nearly* 1 MB spans: the slight
+/// misalignment spreads out our metadata to different cache sets.
+pub const DEFAULT_DESIRED_SPAN_SIZE: usize = (1 << 20) - SPAN_ALIGNMENT;
+
+static_assertions::const_assert!(DEFAULT_DESIRED_SPAN_SIZE <= MAX_SPAN_SIZE);
 
 /// Grabbing an address space of at least this many bytes should be
 /// enough to find a spot for the span + its metadata.
@@ -507,14 +518,23 @@ impl Mill {
         })
     }
 
-    /// Attempts to chop a new span from a chunk.
-    fn allocate_span(chunk: &mut Chunk) -> Option<MilledRange> {
+    /// Attempts to chop a new set of spans from a chunk.
+    ///
+    /// On success, it will contain at least `min` spans, and up to `desired` spans.
+    fn allocate_span(chunk: &mut Chunk, min: usize, desired: usize) -> Option<MilledRange> {
         if chunk.next_free_span >= chunk.span_count {
             return None;
         }
 
+        let remaining = chunk.span_count - chunk.next_free_span;
+        // TODO: it would be nice to save these unused spans somewhere.
+        if remaining < min {
+            return None;
+        }
+
+        let allocated = remaining.min(desired);
         let index = chunk.next_free_span;
-        chunk.next_free_span += 1;
+        chunk.next_free_span += allocated;
 
         let meta: &'static mut _ = unsafe { chunk.meta.as_mut() }.unwrap();
         // Bamboozle the borrow checker... we will pass two mutable
@@ -524,30 +544,59 @@ impl Mill {
 
         Some(MilledRange {
             meta: &mut meta.chunk_meta[index],
-            trail: &mut meta2.chunk_meta[index + 1..index + 1],
+            trail: &mut meta2.chunk_meta[index + 1..index + allocated],
             data: (chunk.spans + index * SPAN_ALIGNMENT) as *mut c_void,
-            data_size: SPAN_ALIGNMENT,
+            data_size: allocated * SPAN_ALIGNMENT,
         })
     }
 
-    /// Attempts to return a fresh range of allocation space.
+    /// Attempts to return a fresh range of allocation space.  On
+    /// success, the newly milled range will contain at least
+    /// `min_size` bytes, but the implementation tries to get
+    /// `desired_size`, if possible.
+    ///
+    /// The `min_size` must be at most `MAX_SPAN_SIZE`.
     ///
     /// # Errors
     ///
     /// Returns `Err` on mapping failures (OOM-like conditions).
-    pub fn get_span(&self) -> Result<MilledRange, i32> {
+    pub fn get_span(
+        &self,
+        min_size: usize,
+        desired_size: Option<usize>,
+    ) -> Result<MilledRange, i32> {
+        assert!(min_size <= MAX_SPAN_SIZE);
+
+        // We must want at least min_size, and not more than the maximum span size.
+        let desired = desired_size
+            .unwrap_or(DEFAULT_DESIRED_SPAN_SIZE)
+            .clamp(min_size, MAX_SPAN_SIZE);
+        let min_span_count =
+            (min_size / SPAN_ALIGNMENT) + ((min_size % SPAN_ALIGNMENT) > 0) as usize;
+        let desired_span_count =
+            (desired / SPAN_ALIGNMENT) + ((desired % SPAN_ALIGNMENT) > 0) as usize;
+
         let mut chunk_or = self.current_chunk.lock().unwrap();
 
         if chunk_or.is_none() {
             *chunk_or = Some(Mill::allocate_chunk(self.mapper)?);
         }
 
-        if let Some(range) = Mill::allocate_span(chunk_or.as_mut().unwrap()) {
+        if let Some(range) = Mill::allocate_span(
+            chunk_or.as_mut().unwrap(),
+            min_span_count,
+            desired_span_count,
+        ) {
             return Ok(range);
         }
 
         *chunk_or = Some(Mill::allocate_chunk(self.mapper)?);
-        Ok(Mill::allocate_span(chunk_or.as_mut().unwrap()).expect("New chunk must have a span"))
+        Ok(Mill::allocate_span(
+            chunk_or.as_mut().unwrap(),
+            min_span_count,
+            desired_span_count,
+        )
+        .expect("New chunk must have a span"))
     }
 }
 

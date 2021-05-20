@@ -99,7 +99,10 @@ impl Press {
             return Ok(());
         }
 
-        let range = mill.get_span()?;
+        // Get a new span.  It must have enough bytes for one
+        // allocation, but will usually have more (the default desired
+        // size, nearly 1 MB).
+        let range = mill.get_span(self.layout.size(), None)?;
         let meta: &mut _ = range.meta;
 
         meta.class_id = Some(self.class.id());
