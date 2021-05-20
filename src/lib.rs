@@ -4,6 +4,7 @@ mod individual;
 mod linear_ref;
 mod magazine;
 mod map;
+mod mill;
 mod press;
 
 use std::ffi::c_void;
