@@ -169,17 +169,42 @@ struct AllocatedChunk<'a> {
 }
 
 impl<'a> AllocatedChunk<'a> {
+    /// Attempts to carve out a chunk + metadata from a new range of
+    /// address space returned by `mapper`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the mapper itself fails.  Failures downstream
+    /// indicate that the mapper returned an invalid range, and result
+    /// in panic.
+    pub fn new(mapper: &'a dyn Mapper) -> Result<AllocatedChunk<'a>, i32> {
+        let page_size = mapper.page_size();
+        let mut size = MAPPED_REGION_SIZE;
+        if (size % page_size) > 0 {
+            size = page_size * (1 + (size / page_size));
+        }
+
+        let (region, actual): (NonNull<c_void>, usize) =
+            mapper.reserve(size, DATA_ALIGNMENT, PREFIX_SIZE, SUFFIX_SIZE)?;
+        Ok(AllocatedChunk::new_from_range(
+            mapper,
+            NonZeroUsize::new(region.as_ptr() as usize).expect("NonNull should be NonZero"),
+            actual,
+        )
+        .expect("mapper returned a bad region"))
+    }
+
     /// Attempts to carve out a chunk + metadata in `[base, base + size)`.
-    pub fn new(
+    fn new_from_range(
         mapper: &'a dyn Mapper,
         base: NonZeroUsize,
         size: usize,
     ) -> Result<AllocatedChunk<'a>, &'static str> {
+        let page_size = mapper.page_size();
+
         // Try to find the data address.  It must be aligned to 2MB,
         // and have room for the metadata + guard pages before/after
         // the data chunk.
-        let page_size = mapper.page_size();
-
         if (base.get() % page_size) != 0 {
             return Err("base is incorrectly aligned");
         }
@@ -388,23 +413,7 @@ impl Mill {
     ///
     /// Returns `Err` on mapping failures (OOM-like conditions).
     pub fn get_chunk(&self) -> Result<MilledRange, i32> {
-        let page_size = self.mapper.page_size();
-        let mut size = MAPPED_REGION_SIZE;
-        if (size % page_size) > 0 {
-            size = page_size * (1 + (size / page_size));
-        }
-
-        let (region, actual): (NonNull<c_void>, usize) =
-            self.mapper
-                .reserve(size, DATA_ALIGNMENT, PREFIX_SIZE, SUFFIX_SIZE)?;
-        let chunk = AllocatedChunk::new(
-            self.mapper,
-            NonZeroUsize::new(region.as_ptr() as usize).unwrap(),
-            actual,
-        )
-        .expect("Mapper failed to return a valid region");
-
-        chunk.call_with_chunk(|chunk| {
+        AllocatedChunk::new(self.mapper)?.call_with_chunk(|chunk| {
             let meta = unsafe { chunk.meta.as_mut() }.expect("must be valid");
             Ok(MilledRange {
                 meta,
@@ -453,8 +462,9 @@ fn test_allocated_chunk_valid() {
 
     // We assume the zero page can't be mapped.  See what happens when
     // we get the next page.
-    let at_start = AllocatedChunk::new(
-        NonZeroUsize::new(map::page_size()).unwrap(),
+    let at_start = AllocatedChunk::new_from_range(
+        &mapper,
+        NonZeroUsize::new(mapper.page_size()).unwrap(),
         MAPPED_REGION_SIZE,
     )
     .expect("must construct");
@@ -464,14 +474,15 @@ fn test_allocated_chunk_valid() {
     // page: if the mapped region includes the last page, we fail to
     // represent the end of the region.  I don't think it's worth
     // adding complexity to handle a situation that never happens.
-    let at_end = AllocatedChunk::new(
-        NonZeroUsize::new(usize::MAX - MAPPED_REGION_SIZE - map::page_size() + 1).unwrap(),
+    let at_end = AllocatedChunk::new_from_range(
+        &mapper,
+        NonZeroUsize::new(usize::MAX - MAPPED_REGION_SIZE - mapper.page_size() + 1).unwrap(),
         MAPPED_REGION_SIZE,
     )
     .expect("must construct");
     at_end.check_rep();
 
-    let aligned = AllocatedChunk::new(
+    let aligned = AllocatedChunk::new_from_range(
         &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT).unwrap(),
         MAPPED_REGION_SIZE,
@@ -479,7 +490,7 @@ fn test_allocated_chunk_valid() {
     .expect("must construct");
     aligned.check_rep();
 
-    let unaligned = AllocatedChunk::new(
+    let unaligned = AllocatedChunk::new_from_range(
         &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT + mapper.page_size()).unwrap(),
         MAPPED_REGION_SIZE,
@@ -487,7 +498,7 @@ fn test_allocated_chunk_valid() {
     .expect("must construct");
     unaligned.check_rep();
 
-    let offset_guard = AllocatedChunk::new(
+    let offset_guard = AllocatedChunk::new_from_range(
         &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - GUARD_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
@@ -495,7 +506,7 @@ fn test_allocated_chunk_valid() {
     .expect("must construct");
     offset_guard.check_rep();
 
-    let offset_meta = AllocatedChunk::new(
+    let offset_meta = AllocatedChunk::new_from_range(
         &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - GUARD_PAGE_SIZE - METADATA_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
@@ -503,7 +514,7 @@ fn test_allocated_chunk_valid() {
     .expect("must construct");
     offset_meta.check_rep();
 
-    let off_by_one = AllocatedChunk::new(
+    let off_by_one = AllocatedChunk::new_from_range(
         &mapper,
         NonZeroUsize::new(
             DATA_ALIGNMENT - 2 * GUARD_PAGE_SIZE - METADATA_PAGE_SIZE + mapper.page_size(),
@@ -514,7 +525,7 @@ fn test_allocated_chunk_valid() {
     .expect("must construct");
     off_by_one.check_rep();
 
-    let exact_fit = AllocatedChunk::new(
+    let exact_fit = AllocatedChunk::new_from_range(
         &mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - 2 * GUARD_PAGE_SIZE - METADATA_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
