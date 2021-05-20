@@ -71,10 +71,15 @@ pub trait Mapper: std::fmt::Debug + Sync {
     /// `reserve` call.
     fn release(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
 
-    /// Prepares a page-aligned range for read and write access.
-    /// The `allocate`d range is always a subset of a range that was
-    /// returned by a single `reserve` call.
-    fn allocate(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
+    /// Prepares a page-aligned range of metadata for read and write
+    /// access.  The `allocate`d range is always a subset of a range
+    /// that was returned by a single `reserve` call.
+    fn allocate_meta(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
+
+    /// Prepares a page-aligned range of object data for read and
+    /// write access.  The `allocate`d range is always a subset of a
+    /// range that was returned by a single `reserve` call.
+    fn allocate_data(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
 }
 
 #[derive(Debug)]
@@ -363,24 +368,39 @@ impl<'a> AllocatedChunk<'a> {
     /// Backs the data and metadata region with memory.
     fn allocate(&self) -> Result<(), i32> {
         // Ensures the region containing [begin, begin + size) is
-        // backed by memory, by rounding outward.
-        fn rounded_allocate(mapper: &dyn Mapper, mut begin: usize, size: usize) -> Result<(), i32> {
+        // backed by memory, by rounding outward to a page.
+        fn rounded_allocate(
+            page_size: usize,
+            mut begin: usize,
+            size: usize,
+            allocator: impl FnOnce(NonNull<c_void>, usize) -> Result<(), i32>,
+        ) -> Result<(), i32> {
             let mut top = begin + size;
 
-            let page_size = mapper.page_size();
             begin -= begin % page_size;
             if (top % page_size) > 0 {
                 top = page_size * (1 + (top / page_size));
             }
 
-            mapper.allocate(
+            allocator(
                 NonNull::new(begin as *mut c_void).expect("must be valid"),
                 top - begin,
             )
         }
 
-        rounded_allocate(self.mapper, self.meta as usize, METADATA_PAGE_SIZE)?;
-        rounded_allocate(self.mapper, self.data as usize, DATA_ALIGNMENT)
+        let page_size = self.mapper.page_size();
+        rounded_allocate(
+            page_size,
+            self.meta as usize,
+            METADATA_PAGE_SIZE,
+            |begin, size| self.mapper.allocate_meta(begin, size),
+        )?;
+        rounded_allocate(
+            page_size,
+            self.data as usize,
+            DATA_ALIGNMENT,
+            |begin, size| self.mapper.allocate_data(begin, size),
+        )
     }
 
     /// Releases any slop around the allocated memory.
@@ -389,12 +409,13 @@ impl<'a> AllocatedChunk<'a> {
             let page_size = mapper.page_size();
 
             assert!(begin <= end);
+            assert_eq!(begin % page_size, 0);
+            assert_eq!(end % page_size, 0);
+
             if begin == end {
                 return Ok(());
             }
 
-            assert_eq!(begin % page_size, 0);
-            assert_eq!(end % page_size, 0);
             mapper.release(
                 NonNull::new(begin as *mut c_void).expect("must be valid"),
                 end - begin,
@@ -444,7 +465,11 @@ impl Mapper for DefaultMapper {
         crate::map::release_region(base, size)
     }
 
-    fn allocate(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32> {
+    fn allocate_meta(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32> {
+        crate::map::allocate_region(base, size)
+    }
+
+    fn allocate_data(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32> {
         crate::map::allocate_region(base, size)
     }
 }
