@@ -1,0 +1,11 @@
+[package]
+name = "slitter"
+version = "0.1.0"
+authors = ["Paul Khuong <pkhuong@backtrace.io>"]
+edition = "2018"
+
+[dependencies]
+lazy_static = "1"
+
+[dev-dependencies]
+proptest = "1"
