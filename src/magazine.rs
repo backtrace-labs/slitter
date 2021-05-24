@@ -158,6 +158,12 @@ impl crate::class::ClassInfo {
             .unwrap_or_else(|| self.rack.allocate_empty_magazine())
     }
 
+    /// Returns a cached magazine; it is never empty.
+    #[inline(never)]
+    pub(crate) fn get_cached_magazine(&self) -> Option<Box<Magazine>> {
+        self.partial_mags.pop().or_else(|| self.full_mags.pop())
+    }
+
     /// Returns a magazine; it may be partially populated or empty.
     #[inline(never)]
     pub(crate) fn allocate_non_full_magazine(&self) -> Box<Magazine> {

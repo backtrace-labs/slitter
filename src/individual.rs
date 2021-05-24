@@ -26,7 +26,15 @@ impl Class {
 impl ClassInfo {
     #[inline(never)]
     pub(crate) fn allocate_slow(&self) -> Option<LinearRef> {
-        self.press.allocate_one_object()
+        if let Some(mut mag) = self.get_cached_magazine() {
+            let allocated = mag.get();
+            assert!(allocated.is_some());
+
+            self.release_magazine(mag);
+            allocated
+        } else {
+            self.press.allocate_one_object()
+        }
     }
 
     #[inline(never)]
