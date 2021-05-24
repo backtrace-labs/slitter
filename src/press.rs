@@ -28,6 +28,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 
+pub const MAX_OBJECT_ALIGNMENT: usize = 4096;
+
+static_assertions::const_assert!(MAX_OBJECT_ALIGNMENT <= mill::MAX_SPAN_SIZE);
+
 #[derive(Debug)]
 pub struct Press {
     /// The current span that services bump pointer allocation.
@@ -59,6 +63,10 @@ pub fn check_allocation(class: Class, address: usize) -> Result<(), &'static str
 
 impl Press {
     pub fn new(class: Class, mut layout: Layout) -> Result<Self, &'static str> {
+        if layout.align() > MAX_OBJECT_ALIGNMENT {
+            return Err("slitter only supports alignment up to 4 KB");
+        }
+
         layout = layout.pad_to_align();
 
         if layout.size() > MAX_SPAN_SIZE / 2 {

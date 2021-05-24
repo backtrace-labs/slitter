@@ -105,14 +105,6 @@ impl Class {
             id: NonZeroU32::new(next_id as u32).expect("next_id is positive"),
         };
 
-        // This shouldn't be hard to fix, but we rely on this
-        // constraint to simplify the header-insertion logic below.
-        // We don't plan to exercise any other alignment value, so
-        // code that purports to support them might just be broken.
-        if config.layout.align() > 8 {
-            return Err("slitter only supports 8-byte aligned allocations");
-        }
-
         let info = Box::leak(Box::new(ClassInfo {
             name: config.name,
             layout: config.layout,

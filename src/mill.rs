@@ -31,7 +31,7 @@ const GUARD_PAGE_SIZE: usize = 2 << 20;
 const METADATA_PAGE_SIZE: usize = 2 << 20;
 
 /// Spans are aligned to 16 KB, within the chunk.
-const SPAN_ALIGNMENT: usize = 16 << 10;
+pub const SPAN_ALIGNMENT: usize = 16 << 10;
 
 /// Maximum size in bytes we can service for a single span.  The
 /// higher this value, the more bytes we may lose to fragmentation
