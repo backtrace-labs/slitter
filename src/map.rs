@@ -39,7 +39,7 @@ pub fn reserve_region(size: usize) -> Result<NonNull<c_void>, i32> {
     let mut errno: i32 = 0;
 
     assert!(
-        (size % page_size()) == 0,
+        size > 0 && (size % page_size()) == 0,
         "Bad region size={} page_size={}",
         size,
         page_size()
@@ -56,6 +56,10 @@ pub fn reserve_region(size: usize) -> Result<NonNull<c_void>, i32> {
 ///
 /// The size argument must be a multiple of the page size.
 pub fn release_region(base: NonNull<c_void>, size: usize) -> Result<(), i32> {
+    if size == 0 {
+        return Ok(());
+    }
+
     assert!(
         (size % page_size()) == 0,
         "Bad region size={} page_size={}",
@@ -77,6 +81,10 @@ pub fn release_region(base: NonNull<c_void>, size: usize) -> Result<(), i32> {
 ///
 /// The size argument must be a multiple of the page size.
 pub fn allocate_region(base: NonNull<c_void>, size: usize) -> Result<(), i32> {
+    if size == 0 {
+        return Ok(());
+    }
+
     assert!(
         (size % page_size()) == 0,
         "Bad region size={} page_size={}",
