@@ -14,12 +14,17 @@
 //!
 //! We enable mostly lock-free operations by guaranteeing that each
 //! span and corresponding metadata is immortal once allocated.
-use crate::linear_ref::LinearRef;
-use crate::mill;
-use crate::mill::Mill;
-use crate::mill::SpanMetadata;
-use crate::mill::MAX_SPAN_SIZE;
-use crate::Class;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use contracts::*;
+#[cfg(not(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+)))]
+use disabled_contracts::*;
+
 use std::alloc::Layout;
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -27,6 +32,24 @@ use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use crate::debug_arange_map;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use crate::debug_type_map;
+
+use crate::linear_ref::LinearRef;
+use crate::mill;
+use crate::mill::Mill;
+use crate::mill::SpanMetadata;
+use crate::mill::MAX_SPAN_SIZE;
+use crate::Class;
 
 pub const MAX_OBJECT_ALIGNMENT: usize = 4096;
 
@@ -83,6 +106,17 @@ impl Press {
 
     /// Attempts to allocate one object by bumping the metadata
     /// pointer.
+    #[requires(debug_arange_map::is_metadata(meta as * mut SpanMetadata as usize, std::mem::size_of::<SpanMetadata>()).is_ok(),
+	       "The `meta` reference must come from a metadata range.")]
+    #[ensures(ret.is_some() ->
+	      debug_type_map::associate_class(self.class, ret.as_ref().unwrap()).is_ok(),
+	      "On success, it must be possible to associate the returned address with `self.class`.")]
+    #[ensures(ret.is_some() ->
+	      debug_arange_map::is_data(ret.as_ref().unwrap().get().as_ptr() as usize, self.layout.size()).is_ok(),
+	      "On success, the returned data must come from a data range.")]
+    #[ensures(ret.is_some() ->
+	      check_allocation(self.class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+	      "On success, the allocation must have the class metadata set up.")]
     fn try_allocate_from_span(&self, meta: &mut SpanMetadata) -> Option<LinearRef> {
         let allocated_id = meta.bump_ptr.fetch_add(1, Ordering::Relaxed);
 
@@ -91,10 +125,17 @@ impl Press {
         }
 
         let address = meta.span_begin + allocated_id * self.layout.size();
+        // `meta.bump_ptr` is incremented atomically, so
+        // `LinearRef::new` always receives a unique address.
         Some(LinearRef::new(NonNull::new(address as *mut c_void)?))
     }
 
     /// Attempts to replace our bump pointer with a new one.
+    #[ensures(ret.is_ok() ->
+	      self.bump.load(Ordering::Relaxed) != old(self.bump.load(Ordering::Relaxed)),
+	      "On success, the bump Span has been updated.")]
+    #[ensures(debug_arange_map::is_metadata(self.bump.load(Ordering::Relaxed) as usize, std::mem::size_of::<SpanMetadata>()).is_ok(),
+	      "The bump struct must point to a valid metadata range.")]
     fn try_replace_span(&self, expected: *mut SpanMetadata) -> Result<(), i32> {
         if self.bump.load(Ordering::Relaxed) != expected {
             // Someone else made progress.
@@ -139,6 +180,9 @@ impl Press {
     /// # Errors
     ///
     /// Returns `Err` if we failed to grab a new bump region.
+    #[ensures(ret.is_ok() && ret.as_ref().unwrap().is_some() ->
+	      debug_type_map::is_class(self.class, ret.as_ref().unwrap().as_ref().unwrap()).is_ok(),
+	      "On success, the new allocation has the correct type.")]
     fn try_allocate_once(&self) -> Result<Option<LinearRef>, i32> {
         let meta_ptr: *mut SpanMetadata = self.bump.load(Ordering::Acquire);
 
@@ -151,9 +195,14 @@ impl Press {
         // Either we didn't find any span metadata, and bump
         // allocation failed.  Either way, let's try to put
         // a new span in.
+        //
+        // TODO: log failures somewhere.
         self.try_replace_span(meta_ptr).map(|_| None)
     }
 
+    #[ensures(ret.is_some() ->
+	      debug_type_map::is_class(self.class, ret.as_ref().unwrap()).is_ok(),
+	      "On success, the new allocation has the correct type.")]
     pub fn allocate_one_object(&self) -> Option<LinearRef> {
         loop {
             match self.try_allocate_once() {

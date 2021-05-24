@@ -1,6 +1,16 @@
 //! A `LinearRef` is a `NonNull<c_void>` that can't be copied or
 //! cloned.  We use it internally in Slitter to make it harder to
 //! accidentally duplicate allocations.
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use contracts::*;
+#[cfg(not(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+)))]
+use disabled_contracts::*;
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -20,6 +30,8 @@ impl LinearRef {
     /// This function should only be used when directly interacting
     /// with external code (e.g., callers, the system allocator, or
     /// newly mapped pages).
+    #[allow(clippy::assertions_on_constants)]
+    #[requires(true, "`inner` must be unique (check manually)")]
     pub fn new(inner: NonNull<c_void>) -> Self {
         Self { inner }
     }
@@ -30,7 +42,15 @@ impl LinearRef {
     /// with external code (e.g., when returning an allocation to a
     /// caller).
     pub fn convert_to_non_null(self) -> NonNull<c_void> {
-        self.inner
+        #[allow(clippy::let_and_return)]
+        let ret = self.inner;
+
+        #[cfg(any(
+            all(test, feature = "check_contracts_in_tests"),
+            feature = "check_contracts"
+        ))]
+        std::mem::forget(self);
+        ret
     }
 
     /// Returns a `LinearRef` for an arbitrary non-zero integer
@@ -38,6 +58,23 @@ impl LinearRef {
     pub fn from_address(address: usize) -> Self {
         Self::new(NonNull::new(address as *mut c_void).expect("should not be zero"))
     }
+
+    /// Only used for test and contracts: returns a reference to the
+    /// underlying `NonNull`.
+    #[cfg(any(test, feature = "check_contracts"))]
+    pub(crate) fn get(&self) -> &NonNull<c_void> {
+        &self.inner
+    }
+}
+
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+impl Drop for LinearRef {
+    #[allow(clippy::assertions_on_constants)]
+    #[requires(false, "LinearRef should never be dropped.")]
+    fn drop(&mut self) {}
 }
 
 impl PartialEq for LinearRef {

@@ -108,14 +108,14 @@ impl Class {
     /// On success, there is a corresponding `ClassInfo` struct at
     /// `ret - 1` in the global `CLASSES` array.
     #[ensures(ret.is_ok() ->
-	      CLASSES.lock().unwrap().get(ret.unwrap().id.get() as usize - 1).map(|info| info.id) == Some(ret.unwrap()),
-	      "On success, the class is at id - 1 in the global array of ClassInfo")]
+              CLASSES.lock().unwrap().get(ret.unwrap().id.get() as usize - 1).map(|info| info.id) == Some(ret.unwrap()),
+              "On success, the class is at id - 1 in the global array of ClassInfo")]
     #[ensures(ret.is_ok() ->
-	      Class::from_id(ret.unwrap().id) == Some(ret.unwrap()),
-	      "On success, we can instantiate `Class` from the NonZeroU32 id.")]
+              Class::from_id(ret.unwrap().id) == Some(ret.unwrap()),
+              "On success, we can instantiate `Class` from the NonZeroU32 id.")]
     #[ensures(ret.is_ok() ->
-	      std::ptr::eq(ret.unwrap().info(), CLASSES.lock().unwrap()[ret.unwrap().id.get() as usize - 1]),
-	      "On success, the class's info matches the entry in the array.")]
+              std::ptr::eq(ret.unwrap().info(), CLASSES.lock().unwrap()[ret.unwrap().id.get() as usize - 1]),
+              "On success, the class's info matches the entry in the array.")]
     pub fn new(config: ClassConfig) -> Result<Class, &'static str> {
         let mut classes = CLASSES.lock().unwrap();
 
@@ -145,11 +145,11 @@ impl Class {
     ///
     /// On success, this operation can be inverted by calling `id()`.
     #[ensures(ret.is_none() -> CLASSES.lock().unwrap().iter().all(|info| info.id.id != id),
-	      "`from_id` only fails if there is no registered `ClassInfo` with that id.")]
+              "`from_id` only fails if there is no registered `ClassInfo` with that id.")]
     #[ensures(ret.is_some() -> CLASSES.lock().unwrap()[id.get() as usize - 1].id == ret.unwrap(),
-	      "On success, the class's info is at id - 1 in the global array of info.")]
+              "On success, the class's info is at id - 1 in the global array of info.")]
     #[ensures(ret.is_some() -> ret.unwrap().id == id,
-	      "On success, the return value's id matches the argument.")]
+              "On success, the return value's id matches the argument.")]
     pub(crate) fn from_id(id: NonZeroU32) -> Option<Class> {
         let guard = CLASSES.lock().unwrap();
         if id.get() as usize <= guard.len() {
@@ -163,7 +163,7 @@ impl Class {
     ///
     /// This operation is the inverse of `Class::from_id`.
     #[ensures(Class::from_id(ret) == Some(self),
-	      "We can recover the same `Class` with `Class::from_id`.")]
+              "We can recover the same `Class` with `Class::from_id`.")]
     #[inline]
     pub(crate) fn id(self) -> NonZeroU32 {
         self.id
@@ -233,7 +233,10 @@ mod test {
             // If a slot is None, we will allocate in there the next
             // time we hit it.  If it holds a `NonNull`, we will
             // instead consume and free its contents.
-            let mut slots: Vec<Option<NonNull<c_void>>> = Vec::new();
+            //
+            // Let the vec leak because we do not want to drop its
+            // contents on panic.
+            let slots: &mut Vec<Option<NonNull<c_void>>> = Box::leak(Box::new(Vec::new()));
 
             // Initialise with 20 allocations.
             slots.resize_with(20, || class.allocate());
@@ -269,6 +272,9 @@ mod test {
                     class.release(freed);
                 }
             }
+
+            // Reacquire the vector to avoid leaking on success.
+            unsafe { Box::from_raw(slots as *mut _); }
         }
 
         // Allocate and deallocate in random-ish order from two classes.
@@ -288,7 +294,7 @@ mod test {
             // If a slot is None, we will allocate in there the next
             // time we hit it.  If it holds a `NonNull`, we will
             // instead consume and free its contents.
-            let mut slots: Vec<Option<(NonNull<c_void>, Class)>> = Vec::new();
+            let slots: &mut Vec<Option<(NonNull<c_void>, Class)>> = Box::leak(Box::new(Vec::new()));
 
             slots.resize(20, None);
             for (index, class_id) in indices.iter().cloned() {
@@ -317,6 +323,8 @@ mod test {
                     class.release(freed);
                 }
             }
+
+            unsafe { Box::from_raw(slots as *mut _); }
         }
 
         // Check that we can correctly allocate and deallocate in stack order.
@@ -328,7 +336,7 @@ mod test {
             })
             .expect("Class should build");
 
-            let mut stack: Vec<NonNull<c_void>> = Vec::new();
+            let stack: &mut Vec<NonNull<c_void>> = Box::leak(Box::new(Vec::new()));
 
             for alloc in push_pop.iter().cloned() {
                 if alloc {
@@ -347,6 +355,8 @@ mod test {
             while let Some(freed) = stack.pop() {
                 class.release(freed);
             }
+
+            unsafe { Box::from_raw(stack as *mut _); }
         }
 
         // Check that we can correctly allocate and deallocate in queue order.
@@ -358,7 +368,7 @@ mod test {
             })
             .expect("Class should build");
 
-            let mut queue: VecDeque<NonNull<c_void>> = VecDeque::new();
+            let queue: &mut VecDeque<NonNull<c_void>> = Box::leak(Box::new(VecDeque::new()));
 
             for alloc in push_pop.iter().cloned() {
                 if alloc {
@@ -377,6 +387,8 @@ mod test {
             while let Some(freed) = queue.pop_back() {
                 class.release(freed);
             }
+
+            unsafe { Box::from_raw(queue as *mut _); }
         }
 
         // Check that we can correctly allocate and deallocate in FIFO or LIFO order.
@@ -390,7 +402,7 @@ mod test {
             })
             .expect("Class should build");
 
-            let mut queue: VecDeque<NonNull<c_void>> = VecDeque::new();
+            let queue: &mut VecDeque<NonNull<c_void>> = Box::leak(Box::new(VecDeque::new()));
 
             for action in actions.iter().cloned() {
                 if action == 0 {
@@ -413,6 +425,8 @@ mod test {
             while let Some(freed) = queue.pop_back() {
                 class.release(freed);
             }
+
+            unsafe { Box::from_raw(queue as *mut _); }
         }
     }
 }

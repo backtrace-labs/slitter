@@ -7,6 +7,22 @@ mod map;
 mod mill;
 mod press;
 
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+mod debug_allocation_map;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+mod debug_arange_map;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+mod debug_type_map;
+
 use std::ffi::c_void;
 use std::ptr::NonNull;
 

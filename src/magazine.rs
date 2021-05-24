@@ -2,8 +2,20 @@
 //! arrays of pointers to pre-allocated block.  These small arrays are
 //! "magazines," and are themselves allocated and released by a
 //! "rack."
-use crate::linear_ref::LinearRef;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use contracts::*;
+#[cfg(not(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+)))]
+use disabled_contracts::*;
+
 use std::sync::Mutex;
+
+use crate::linear_ref::LinearRef;
 
 const MAGAZINE_SIZE: u32 = 30;
 
@@ -78,12 +90,12 @@ impl Magazine {
     }
 
     #[inline]
-    fn is_full(&self) -> bool {
+    pub fn is_full(&self) -> bool {
         self.num_allocated == MAGAZINE_SIZE
     }
 
     #[inline]
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.num_allocated == 0
     }
 }
@@ -114,6 +126,7 @@ impl MagazineStack {
         }
     }
 
+    #[requires(mag.link.is_none(), "Magazines are only linked once.")]
     fn push(&self, mut mag: Box<Magazine>) {
         assert!(mag.link.is_none());
         let mut stack = self.inner.lock().unwrap();
@@ -122,6 +135,9 @@ impl MagazineStack {
         *stack = Some(mag)
     }
 
+    #[ensures(ret.is_some() ->
+              ret.as_ref().unwrap().link.is_none(),
+              "Magazines must be unlinked when popped.")]
     fn pop(&self) -> Option<Box<Magazine>> {
         let mut stack = self.inner.lock().unwrap();
 
@@ -136,10 +152,12 @@ impl MagazineStack {
 }
 
 impl Rack {
+    #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
     pub fn allocate_empty_magazine(&self) -> Box<Magazine> {
         Box::new(Default::default())
     }
 
+    #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]
     pub fn release_empty_magazine(&self, mag: Box<Magazine>) {
         // We can only release empty magazines.
         assert_eq!(mag.num_allocated, 0);
@@ -159,12 +177,15 @@ impl crate::class::ClassInfo {
     }
 
     /// Returns a cached magazine; it is never empty.
+    #[ensures(ret.is_some() -> !ret.as_ref().unwrap().is_empty(),
+              "On success, the magazine is non-empty.")]
     #[inline(never)]
     pub(crate) fn get_cached_magazine(&self) -> Option<Box<Magazine>> {
         self.partial_mags.pop().or_else(|| self.full_mags.pop())
     }
 
     /// Returns a magazine; it may be partially populated or empty.
+    #[ensures(!ret.is_full(), "The returned magazine is never empty.")]
     #[inline(never)]
     pub(crate) fn allocate_non_full_magazine(&self) -> Box<Magazine> {
         self.partial_mags
@@ -177,6 +198,8 @@ impl crate::class::ClassInfo {
     /// When the return value is not `None` (i.e., not an OOM), `mag`
     /// is usually non-empty on exit; in the common case, `mag` is
     /// one allocation (the return value) short of full.
+    #[ensures(ret.is_none() -> mag.is_empty(),
+              "Allocation never fails when the magazine is non-empty.")]
     #[inline(never)]
     pub(crate) fn refill_magazine(&self, mag: &mut Box<Magazine>) -> Option<LinearRef> {
         // Try to get a new non-empty magazine; prefer partial mags
@@ -253,12 +276,28 @@ fn smoke_test_magazine() {
     assert_eq!(mag.put(LinearRef::from_address(1)), None); // mag: [1]
     assert_eq!(mag.put(LinearRef::from_address(2)), None); // mag: [1, 2]
 
-    assert_eq!(mag.get(), Some(LinearRef::from_address(2))); // mag: [1]
+    {
+        let popped = mag.get().expect("should have a value"); // mag: [1]
+
+        assert_eq!(popped.get().as_ptr() as usize, 2);
+        std::mem::forget(popped);
+    }
 
     assert_eq!(mag.put(LinearRef::from_address(3)), None); // mag: [1, 3]
 
-    assert_eq!(mag.get(), Some(LinearRef::from_address(3))); // mag: [1]
-    assert_eq!(mag.get(), Some(LinearRef::from_address(1))); // mag: []
+    {
+        let popped = mag.get().expect("should have a value");
+
+        assert_eq!(popped.get().as_ptr() as usize, 3); // mag: [1]
+        std::mem::forget(popped);
+    }
+
+    {
+        let popped = mag.get().expect("should have a value");
+
+        assert_eq!(popped.get().as_ptr() as usize, 1); // mag: []
+        std::mem::forget(popped);
+    }
 
     rack.release_empty_magazine(mag);
 }
@@ -276,16 +315,21 @@ fn magazine_fill_up() {
     }
 
     // This insert should fail
-    assert_eq!(
-        mag.put(LinearRef::from_address(usize::MAX)),
-        Some(LinearRef::from_address(usize::MAX))
-    );
+    let failed_insert = mag
+        .put(LinearRef::from_address(usize::MAX))
+        .expect("should fail");
+    assert_eq!(failed_insert.get().as_ptr() as usize, usize::MAX);
+    std::mem::forget(failed_insert);
+
     assert_eq!(mag.num_allocated, MAGAZINE_SIZE);
 
     // We should pop in LIFO order.
     for i in (1..=MAGAZINE_SIZE).rev() {
         assert_eq!(mag.num_allocated, i);
-        assert_eq!(mag.get(), Some(LinearRef::from_address(i as usize)));
+        let popped = mag.get().expect("has value");
+        assert_eq!(popped.get().as_ptr() as usize, i as usize);
+        std::mem::forget(popped);
+
         assert_eq!(mag.num_allocated, i - 1);
     }
 
@@ -316,7 +360,10 @@ fn magazine_populate() {
     // We should pop in LIFO order.
     for i in (1..=MAGAZINE_SIZE).rev() {
         assert_eq!(mag.num_allocated, i);
-        assert_eq!(mag.get(), Some(LinearRef::from_address(i as usize)));
+        let popped = mag.get().expect("has value");
+        assert_eq!(popped.get().as_ptr() as usize, i as usize);
+        std::mem::forget(popped);
+
         assert_eq!(mag.num_allocated, i - 1);
     }
 

@@ -17,11 +17,28 @@
 //! Each chunk is divided 64 K spans of 16 KB each.  Each span is
 //! associated with a metadata object in the parallel flat array that
 //! lives in the metadata range.
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use contracts::*;
+#[cfg(not(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+)))]
+use disabled_contracts::*;
+
 use std::ffi::c_void;
 use std::num::NonZeroU32;
 use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicUsize;
+
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use crate::debug_arange_map;
 
 /// Data chunks are naturally aligned to their size, 1GB.
 const DATA_ALIGNMENT: usize = 1 << 30;
@@ -84,12 +101,16 @@ static_assertions::const_assert!(std::mem::size_of::<MetaArray>() <= METADATA_PA
 
 /// `Mill` are parameterised on `Mapper`s that are responsible for
 /// acquiring address space from the operating system.
+#[allow(clippy::inline_fn_without_body)]
+#[contract_trait]
 pub trait Mapper: std::fmt::Debug + Sync {
     /// Returns the mapping granularity for this mapper.  All calls
     /// into the mapper will align addresses and sizes to that page
     /// size.
     ///
     /// The page size must be constant for the lifetime of a process.
+    #[ensures(ret > 0 && ret & (ret - 1) == 0, "page size must be a power of 2")]
+    #[ensures(ret <= GUARD_PAGE_SIZE, "pages should be smaller than guard ranges")]
     fn page_size(&self) -> usize;
 
     /// Attempts to reserve a range of address space.  On success,
@@ -105,6 +126,10 @@ pub trait Mapper: std::fmt::Debug + Sync {
     ///
     /// The `data_size`, `prefix`, and `suffix` values may
     /// be misaligned with respect to the page size.
+    #[requires(desired_size % self.page_size() == 0)]
+    #[requires(desired_size > 0)]
+    #[requires(data_size > 0)]
+    #[ensures(ret.is_ok() -> debug_arange_map::reserve_range(ret.unwrap().0.as_ptr() as usize, ret.unwrap().1).is_ok())]
     fn reserve(
         &self,
         desired_size: usize,
@@ -117,16 +142,24 @@ pub trait Mapper: std::fmt::Debug + Sync {
     /// with a single call to `reserve`.  The `release`d range is
     /// always a subset of a range that was returned by a single
     /// `reserve` call.
+    #[requires(base.as_ptr() as usize % self.page_size() == 0)]
+    #[requires(size % self.page_size() == 0)]
+    #[requires(debug_arange_map::releasable_range(base.as_ptr() as usize, size).is_ok())]
+    #[ensures(ret.is_ok() -> debug_arange_map::release_range(base.as_ptr() as usize, size).is_ok())]
     fn release(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
 
     /// Prepares a page-aligned range of metadata for read and write
     /// access.  The `allocate`d range is always a subset of a range
     /// that was returned by a single `reserve` call.
+    #[requires(debug_arange_map::can_mark_metadata(base.as_ptr() as usize, size).is_ok())]
+    #[ensures(ret.is_ok() -> debug_arange_map::mark_metadata(base.as_ptr() as usize, size).is_ok())]
     fn allocate_meta(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
 
     /// Prepares a page-aligned range of object data for read and
     /// write access.  The `allocate`d range is always a subset of a
     /// range that was returned by a single `reserve` call.
+    #[requires(debug_arange_map::can_mark_data(base.as_ptr() as usize, size).is_ok())]
+    #[ensures(ret.is_ok() -> debug_arange_map::mark_data(base.as_ptr() as usize, size).is_ok())]
     fn allocate_data(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
 }
 
@@ -600,6 +633,7 @@ impl Mill {
     }
 }
 
+#[contract_trait]
 impl Mapper for DefaultMapper {
     fn page_size(&self) -> usize {
         crate::map::page_size()
