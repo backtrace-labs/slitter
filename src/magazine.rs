@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 const MAGAZINE_SIZE: u32 = 30;
 
-#[repr(C)] // We play fun tricks with zero-intialisation.
+#[repr(C)] // We play fun tricks with zero-initialisation.
 pub struct Magazine {
     // The `allocations` array is populated from the bottom up;
     // the first `num_allocated` indices have NonNull values,
@@ -190,8 +190,8 @@ impl crate::class::ClassInfo {
             return allocated;
         }
 
-        let allocated = self.allocate_slow()?;
-        mag.populate(|| self.allocate_slow());
+        let allocated = self.press.allocate_one_object()?;
+        mag.populate(|| self.press.allocate_one_object());
         Some(allocated)
     }
 
