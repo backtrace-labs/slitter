@@ -5,6 +5,17 @@
 //! objects from different classes have the same size: the Slitter
 //! code may check this invariant to help detect bugs, and callers may
 //! rely on type stability.
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use contracts::*;
+#[cfg(not(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+)))]
+use disabled_contracts::*;
+
 use std::alloc::Layout;
 use std::ffi::CStr;
 use std::num::NonZeroU32;
@@ -93,6 +104,18 @@ pub fn max_id() -> usize {
 
 impl Class {
     /// Attempts to create a new allocation class for `config`.
+    ///
+    /// On success, there is a corresponding `ClassInfo` struct at
+    /// `ret - 1` in the global `CLASSES` array.
+    #[ensures(ret.is_ok() ->
+	      CLASSES.lock().unwrap().get(ret.unwrap().id.get() as usize - 1).map(|info| info.id) == Some(ret.unwrap()),
+	      "On success, the class is at id - 1 in the global array of ClassInfo")]
+    #[ensures(ret.is_ok() ->
+	      Class::from_id(ret.unwrap().id) == Some(ret.unwrap()),
+	      "On success, we can instantiate `Class` from the NonZeroU32 id.")]
+    #[ensures(ret.is_ok() ->
+	      std::ptr::eq(ret.unwrap().info(), CLASSES.lock().unwrap()[ret.unwrap().id.get() as usize - 1]),
+	      "On success, the class's info matches the entry in the array.")]
     pub fn new(config: ClassConfig) -> Result<Class, &'static str> {
         let mut classes = CLASSES.lock().unwrap();
 
@@ -118,7 +141,16 @@ impl Class {
         Ok(id)
     }
 
-    pub fn from_id(id: NonZeroU32) -> Option<Class> {
+    /// Returns a `Class` struct for `id` if such a class exists.
+    ///
+    /// On success, this operation can be inverted by calling `id()`.
+    #[ensures(ret.is_none() -> CLASSES.lock().unwrap().iter().all(|info| info.id.id != id),
+	      "`from_id` only fails if there is no registered `ClassInfo` with that id.")]
+    #[ensures(ret.is_some() -> CLASSES.lock().unwrap()[id.get() as usize - 1].id == ret.unwrap(),
+	      "On success, the class's info is at id - 1 in the global array of info.")]
+    #[ensures(ret.is_some() -> ret.unwrap().id == id,
+	      "On success, the return value's id matches the argument.")]
+    pub(crate) fn from_id(id: NonZeroU32) -> Option<Class> {
         let guard = CLASSES.lock().unwrap();
         if id.get() as usize <= guard.len() {
             Some(Class { id })
@@ -127,11 +159,18 @@ impl Class {
         }
     }
 
+    /// Returns the `Class`'s underlying `NonZeroU32` id.
+    ///
+    /// This operation is the inverse of `Class::from_id`.
+    #[ensures(Class::from_id(ret) == Some(self),
+	      "We can recover the same `Class` with `Class::from_id`.")]
+    #[inline]
     pub(crate) fn id(self) -> NonZeroU32 {
         self.id
     }
 
     /// Returns the global `ClassInfo` for this `Class`.
+    #[ensures(ret.id == self)]
     pub(crate) fn info(self) -> &'static ClassInfo {
         let guard = CLASSES.lock().unwrap();
 

@@ -4,7 +4,14 @@ version = "0.1.0"
 authors = ["Paul Khuong <pkhuong@backtrace.io>"]
 edition = "2018"
 
+[features]
+default = ["check_contracts_in_tests"]
+check_contracts_in_tests = []  # Enable contract checking for cfg(test).
+check_contracts = ["contracts"]  # Enable contract checking.
+
 [dependencies]
+contracts = { version = "0.6", optional = true }
+disabled_contracts = "0.1"
 lazy_static = "1"
 smallvec = "1"
 static_assertions = "1.1"
@@ -13,4 +20,6 @@ static_assertions = "1.1"
 cc = "1"
 
 [dev-dependencies]
-proptest = "1"
+contracts = { version = "0.6" }  # Only used in tests.
+proptest = "1"  # Run with `PROPTEST_FORK=true cargo test`, otherwise
+                # global state fills up and slows down debug checks.
