@@ -178,8 +178,9 @@ impl crate::class::ClassInfo {
     /// one allocation (the return value) short of full.
     #[inline(never)]
     pub(crate) fn refill_magazine(&self, mag: &mut Box<Magazine>) -> Option<LinearRef> {
-        // Try to get a new non-empty magazine.
-        if let Some(mut new_mag) = self.full_mags.pop().or_else(|| self.partial_mags.pop()) {
+        // Try to get a new non-empty magazine; prefer partial mags
+        // because we prefer to have 0 partial mags.
+        if let Some(mut new_mag) = self.partial_mags.pop().or_else(|| self.full_mags.pop()) {
             assert!(!new_mag.is_empty());
 
             let allocated = new_mag.get();
