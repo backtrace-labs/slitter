@@ -99,16 +99,11 @@ impl Default for Magazine {
         ) {
         }
 
-        // This is safe, despite using `NonNull`: `Option<NonNull<T>>`
-        // has the same layout as `*T`
-        // (https://doc.rust-lang.org/std/option/index.html#representation),
-        // and that's FFI-safe
-        // (https://rust-lang.github.io/unsafe-code-guidelines/layout/enums.html#discriminant-elision-on-option-like-enums).
-        // We also know that we only run on implementations of C where NULL
-        // is all zero bits.
-        //
-        // The same guarantee applies to `Option<Box<T>>`.
-        unsafe { std::mem::zeroed() }
+        Self {
+            num_allocated: 0,
+            allocations: Default::default(),
+            link: None,
+        }
     }
 }
 
