@@ -32,6 +32,7 @@ impl LinearRef {
     /// newly mapped pages).
     #[allow(clippy::assertions_on_constants)]
     #[requires(true, "`inner` must be unique (check manually)")]
+    #[inline(always)]
     pub fn new(inner: NonNull<c_void>) -> Self {
         Self { inner }
     }
@@ -41,6 +42,7 @@ impl LinearRef {
     /// This function should only be used when directly interacting
     /// with external code (e.g., when returning an allocation to a
     /// caller).
+    #[inline(always)]
     pub fn convert_to_non_null(self) -> NonNull<c_void> {
         #[allow(clippy::let_and_return)]
         let ret = self.inner;
