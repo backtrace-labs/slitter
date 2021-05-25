@@ -34,7 +34,7 @@ use crate::Class;
 /// For each allocation class, we cache up to one magazine's worth of
 /// allocations.
 struct ClassCache {
-    mag: Box<Magazine>,
+    mag: Magazine,
 
     // The `info` field is only `None` for the dummy entry we keep
     // around for the invalid "0" class id.

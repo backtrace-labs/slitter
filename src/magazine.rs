@@ -19,21 +19,27 @@ use crate::linear_ref::LinearRef;
 
 const MAGAZINE_SIZE: u32 = 30;
 
+/// A Magazine is a thin wrapper around MagazineImpl: the wrapping
+/// lets us impose a tighter contract on the interface used in the
+/// allocator, while keeping the internal implementation testable.
+#[repr(transparent)]
+pub struct Magazine(Box<MagazineImpl>);
+
 #[repr(C)] // We play fun tricks with zero-initialisation.
-pub struct Magazine {
-    // The `allocations` array is populated from the bottom up;
-    // the first `num_allocated` indices have NonNull values,
-    // and the remainder are undefined.
+struct MagazineImpl {
+    /// The `allocations` array is populated from the bottom up;
+    /// the first `num_allocated` indices have NonNull values,
+    /// and the remainder are undefined.
     num_allocated: u32,
     allocations: [Option<LinearRef>; MAGAZINE_SIZE as usize],
 
-    // Single linked list linkage.
-    link: Option<Box<Magazine>>,
+    /// Single linked list linkage.
+    link: Option<Box<MagazineImpl>>,
 }
 
 /// A `MagazineStack` is a single-linked intrusive stack of magazines.
 pub struct MagazineStack {
-    inner: Mutex<Option<Box<Magazine>>>,
+    inner: Mutex<Option<Box<MagazineImpl>>>,
 }
 
 /// A `Rack` allocates and recycles empty magazines.
@@ -49,6 +55,38 @@ pub fn get_default_rack() -> &'static Rack {
 }
 
 impl Magazine {
+    /// Attempts to get an unused block from the magazine.
+    #[inline(always)]
+    pub fn get(&mut self) -> Option<LinearRef> {
+        self.0.get()
+    }
+
+    /// Attempts to put an unused block back in the magazine.
+    ///
+    /// Returns that unused block on failure.
+    #[inline(always)]
+    pub fn put(&mut self, freed: LinearRef) -> Option<LinearRef> {
+        self.0.put(freed)
+    }
+
+    /// Fills `self` with allocations returned by `allocator`
+    #[inline(always)]
+    pub fn populate(&mut self, allocator: impl FnMut() -> Option<LinearRef>) {
+        self.0.populate(allocator)
+    }
+
+    #[inline(always)]
+    pub fn is_full(&self) -> bool {
+        self.0.is_full()
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl MagazineImpl {
     /// Attempts to get an unused block from the magazine.
     pub fn get(&mut self) -> Option<LinearRef> {
         if self.num_allocated == 0 {
@@ -100,14 +138,14 @@ impl Magazine {
     }
 }
 
-impl Default for Magazine {
+impl Default for MagazineImpl {
     fn default() -> Self {
-        // Proof that Magazine its constituents are FFI-safe.
+        // Proof that MagazineImpl its constituents are FFI-safe.
         #[allow(dead_code)]
         extern "C" fn unused(
-            _mag: Magazine,
+            _mag: MagazineImpl,
             _ref: Option<LinearRef>,
-            _link: Option<Box<Magazine>>,
+            _link: Option<Box<MagazineImpl>>,
         ) {
         }
 
@@ -126,25 +164,25 @@ impl MagazineStack {
         }
     }
 
-    #[requires(mag.link.is_none(), "Magazines are only linked once.")]
-    fn push(&self, mut mag: Box<Magazine>) {
-        assert!(mag.link.is_none());
+    #[requires(mag.0.link.is_none(), "Magazines are only linked once.")]
+    fn push(&self, mut mag: Magazine) {
+        assert!(mag.0.link.is_none());
         let mut stack = self.inner.lock().unwrap();
 
-        mag.link = stack.take();
-        *stack = Some(mag)
+        mag.0.link = stack.take();
+        *stack = Some(mag.0)
     }
 
     #[ensures(ret.is_some() ->
-              ret.as_ref().unwrap().link.is_none(),
+              ret.as_ref().unwrap().0.link.is_none(),
               "Magazines must be unlinked when popped.")]
-    fn pop(&self) -> Option<Box<Magazine>> {
+    fn pop(&self) -> Option<Magazine> {
         let mut stack = self.inner.lock().unwrap();
 
         if let Some(mut mag) = stack.take() {
             std::mem::swap(&mut mag.link, &mut *stack);
             assert!(mag.link.is_none());
-            Some(mag)
+            Some(Magazine(mag))
         } else {
             None
         }
@@ -153,14 +191,14 @@ impl MagazineStack {
 
 impl Rack {
     #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
-    pub fn allocate_empty_magazine(&self) -> Box<Magazine> {
-        Box::new(Default::default())
+    pub fn allocate_empty_magazine(&self) -> Magazine {
+        Magazine(Box::new(Default::default()))
     }
 
     #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]
-    pub fn release_empty_magazine(&self, mag: Box<Magazine>) {
+    pub fn release_empty_magazine(&self, mag: Magazine) {
         // We can only release empty magazines.
-        assert_eq!(mag.num_allocated, 0);
+        assert_eq!(mag.0.num_allocated, 0);
         // And now drop it.
     }
 }
@@ -169,7 +207,7 @@ impl crate::class::ClassInfo {
     /// Returns a magazine; it may be empty, full, or partially
     /// populated.
     #[inline(never)]
-    pub(crate) fn allocate_magazine(&self) -> Box<Magazine> {
+    pub(crate) fn allocate_magazine(&self) -> Magazine {
         self.partial_mags
             .pop()
             .or_else(|| self.full_mags.pop())
@@ -180,14 +218,14 @@ impl crate::class::ClassInfo {
     #[ensures(ret.is_some() -> !ret.as_ref().unwrap().is_empty(),
               "On success, the magazine is non-empty.")]
     #[inline(never)]
-    pub(crate) fn get_cached_magazine(&self) -> Option<Box<Magazine>> {
+    pub(crate) fn get_cached_magazine(&self) -> Option<Magazine> {
         self.partial_mags.pop().or_else(|| self.full_mags.pop())
     }
 
     /// Returns a magazine; it may be partially populated or empty.
     #[ensures(!ret.is_full(), "The returned magazine is never empty.")]
     #[inline(never)]
-    pub(crate) fn allocate_non_full_magazine(&self) -> Box<Magazine> {
+    pub(crate) fn allocate_non_full_magazine(&self) -> Magazine {
         self.partial_mags
             .pop()
             .unwrap_or_else(|| self.rack.allocate_empty_magazine())
@@ -201,7 +239,7 @@ impl crate::class::ClassInfo {
     #[ensures(ret.is_none() -> mag.is_empty(),
               "Allocation never fails when the magazine is non-empty.")]
     #[inline(never)]
-    pub(crate) fn refill_magazine(&self, mag: &mut Box<Magazine>) -> Option<LinearRef> {
+    pub(crate) fn refill_magazine(&self, mag: &mut Magazine) -> Option<LinearRef> {
         // Try to get a new non-empty magazine; prefer partial mags
         // because we prefer to have 0 partial mags.
         if let Some(mut new_mag) = self.partial_mags.pop().or_else(|| self.full_mags.pop()) {
@@ -225,7 +263,7 @@ impl crate::class::ClassInfo {
     /// On exit, `spilled` is in a magazine, and `mag` is usually not
     /// full; in the common case, `mag` only contains `spilled`.
     #[inline(never)]
-    pub(crate) fn clear_magazine(&self, mag: &mut Box<Magazine>, spilled: LinearRef) {
+    pub(crate) fn clear_magazine(&self, mag: &mut Magazine, spilled: LinearRef) {
         // Get a new non-full magazine.
         let mut new_mag = self
             .partial_mags
@@ -241,8 +279,8 @@ impl crate::class::ClassInfo {
 
     /// Acquires ownership of `mag` and its cached allocations.
     #[inline(never)]
-    pub(crate) fn release_magazine(&self, mag: Box<Magazine>) {
-        assert!(mag.link.is_none());
+    pub(crate) fn release_magazine(&self, mag: Magazine) {
+        assert!(mag.0.link.is_none());
 
         if mag.is_empty() {
             self.rack.release_empty_magazine(mag);
@@ -265,7 +303,7 @@ fn smoke_test_rack() {
 #[test]
 fn smoke_test_magazine() {
     let rack = get_default_rack();
-    let mut mag = rack.allocate_empty_magazine();
+    let mut mag = rack.allocate_empty_magazine().0;
 
     // Getting an empty magazine should return None
     assert_eq!(mag.get(), None); // mag: []
@@ -299,13 +337,13 @@ fn smoke_test_magazine() {
         std::mem::forget(popped);
     }
 
-    rack.release_empty_magazine(mag);
+    rack.release_empty_magazine(Magazine(mag));
 }
 
 #[test]
 fn magazine_fill_up() {
     let rack = get_default_rack();
-    let mut mag = rack.allocate_empty_magazine();
+    let mut mag = rack.allocate_empty_magazine().0;
 
     // Fill up the magazine.
     for i in 1..=MAGAZINE_SIZE {
@@ -340,13 +378,13 @@ fn magazine_fill_up() {
     assert_eq!(mag.get(), None);
     assert_eq!(mag.num_allocated, 0);
 
-    rack.release_empty_magazine(mag);
+    rack.release_empty_magazine(Magazine(mag));
 }
 
 #[test]
 fn magazine_populate() {
     let rack = get_default_rack();
-    let mut mag = rack.allocate_empty_magazine();
+    let mut mag = rack.allocate_empty_magazine().0;
 
     // Fill up the magazine.
     let mut count = 0usize;
@@ -370,7 +408,7 @@ fn magazine_populate() {
     // And now the magazine should be empty.
     assert_eq!(mag.num_allocated, 0);
 
-    rack.release_empty_magazine(mag);
+    rack.release_empty_magazine(Magazine(mag));
 }
 
 #[test]
