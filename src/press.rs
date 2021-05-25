@@ -37,6 +37,11 @@ use std::sync::Mutex;
     all(test, feature = "check_contracts_in_tests"),
     feature = "check_contracts"
 ))]
+use crate::debug_allocation_map;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
 use crate::debug_arange_map;
 #[cfg(any(
     all(test, feature = "check_contracts_in_tests"),
@@ -106,17 +111,21 @@ impl Press {
 
     /// Attempts to allocate one object by bumping the metadata
     /// pointer.
-    #[requires(debug_arange_map::is_metadata(meta as * mut SpanMetadata as usize, std::mem::size_of::<SpanMetadata>()).is_ok(),
-	       "The `meta` reference must come from a metadata range.")]
+    #[requires(debug_arange_map::is_metadata(meta as * mut SpanMetadata as usize,
+                                             std::mem::size_of::<SpanMetadata>()).is_ok(),
+               "The `meta` reference must come from a metadata range.")]
     #[ensures(ret.is_some() ->
-	      debug_type_map::associate_class(self.class, ret.as_ref().unwrap()).is_ok(),
-	      "On success, it must be possible to associate the returned address with `self.class`.")]
+              debug_type_map::associate_class(self.class,
+                                              ret.as_ref().unwrap()).is_ok(),
+              "On success, it must be possible to associate the returned address with `self.class`.")]
     #[ensures(ret.is_some() ->
-	      debug_arange_map::is_data(ret.as_ref().unwrap().get().as_ptr() as usize, self.layout.size()).is_ok(),
-	      "On success, the returned data must come from a data range.")]
+              debug_arange_map::is_data(ret.as_ref().unwrap().get().as_ptr() as usize,
+                                        self.layout.size()).is_ok(),
+              "On success, the returned data must come from a data range.")]
     #[ensures(ret.is_some() ->
-	      check_allocation(self.class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
-	      "On success, the allocation must have the class metadata set up.")]
+              check_allocation(self.class,
+                               ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+              "On success, the allocation must have the class metadata set up.")]
     fn try_allocate_from_span(&self, meta: &mut SpanMetadata) -> Option<LinearRef> {
         let allocated_id = meta.bump_ptr.fetch_add(1, Ordering::Relaxed);
 
@@ -127,15 +136,47 @@ impl Press {
         let address = meta.span_begin + allocated_id * self.layout.size();
         // `meta.bump_ptr` is incremented atomically, so
         // `LinearRef::new` always receives a unique address.
+        //
+        // XXX: This expression has to satisfy the `ensures`
+        // postconditions, checked in `assert_new_bump_is_safe`.
         Some(LinearRef::new(NonNull::new(address as *mut c_void)?))
     }
 
+    /// Asserts that every allocation in `bump` is valid for the
+    /// allocation.
+    #[cfg(any(
+        all(test, feature = "check_contracts_in_tests"),
+        feature = "check_contracts"
+    ))]
+    fn assert_new_bump_is_safe(&self, bump: *mut SpanMetadata) {
+        assert!(
+            debug_arange_map::is_metadata(bump as usize, std::mem::size_of::<SpanMetadata>())
+                .is_ok()
+        );
+
+        let meta = unsafe { bump.as_mut() }.expect("must be valid");
+
+        for i in 0..meta.bump_limit as usize {
+            let address = meta.span_begin + i * self.layout.size();
+            assert!(debug_arange_map::is_data(address, self.layout.size()).is_ok());
+            assert!(check_allocation(self.class, address).is_ok());
+        }
+    }
+
+    #[cfg(not(any(
+        all(test, feature = "check_contracts_in_tests"),
+        feature = "check_contracts"
+    )))]
+    #[inline]
+    fn assert_new_bump_is_safe(&self, _bump: *mut SpanMetadata) {}
+
     /// Attempts to replace our bump pointer with a new one.
     #[ensures(ret.is_ok() ->
-	      self.bump.load(Ordering::Relaxed) != old(self.bump.load(Ordering::Relaxed)),
-	      "On success, the bump Span has been updated.")]
-    #[ensures(debug_arange_map::is_metadata(self.bump.load(Ordering::Relaxed) as usize, std::mem::size_of::<SpanMetadata>()).is_ok(),
-	      "The bump struct must point to a valid metadata range.")]
+              self.bump.load(Ordering::Relaxed) != old(self.bump.load(Ordering::Relaxed)),
+              "On success, the bump Span has been updated.")]
+    #[ensures(debug_arange_map::is_metadata(self.bump.load(Ordering::Relaxed) as usize,
+                                            std::mem::size_of::<SpanMetadata>()).is_ok(),
+              "The bump struct must point to a valid metadata range.")]
     fn try_replace_span(&self, expected: *mut SpanMetadata) -> Result<(), i32> {
         if self.bump.load(Ordering::Relaxed) != expected {
             // Someone else made progress.
@@ -154,6 +195,8 @@ impl Press {
         let range = mill.get_span(self.layout.size(), None)?;
         let meta: &mut _ = range.meta;
 
+        // We should have a fresh Metadata struct before claiming it as ours.
+        assert_eq!(meta.class_id, None);
         meta.class_id = Some(self.class.id());
         meta.bump_limit = (range.data_size / self.layout.size()) as u32;
         assert!(
@@ -165,11 +208,14 @@ impl Press {
 
         // Make sure allocations in the trail are properly marked as being ours.
         for trailing_meta in range.trail {
+            // This Metadata struct must not already be allocated.
+            assert_eq!(trailing_meta.class_id, None);
             trailing_meta.class_id = Some(self.class.id());
         }
 
         // Publish the metadata for our fresh span.
         assert_eq!(self.bump.load(Ordering::Relaxed), expected);
+        self.assert_new_bump_is_safe(meta);
         self.bump.store(meta, Ordering::Release);
         Ok(())
     }
@@ -181,8 +227,14 @@ impl Press {
     ///
     /// Returns `Err` if we failed to grab a new bump region.
     #[ensures(ret.is_ok() && ret.as_ref().unwrap().is_some() ->
-	      debug_type_map::is_class(self.class, ret.as_ref().unwrap().as_ref().unwrap()).is_ok(),
-	      "On success, the new allocation has the correct type.")]
+              debug_allocation_map::can_be_allocated(self.class, ret.as_ref().unwrap().as_ref().unwrap().get()).is_ok(),
+              "Successful allocations are fresh, or match the class and avoid double-allocation.")]
+    #[ensures(ret.is_ok() && ret.as_ref().unwrap().is_some() ->
+              debug_type_map::is_class(self.class, ret.as_ref().unwrap().as_ref().unwrap()).is_ok(),
+              "On success, the new allocation has the correct type.")]
+    #[ensures(ret.is_ok() && ret.as_ref().unwrap().is_some() ->
+              check_allocation(self.class, ret.as_ref().unwrap().as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+              "Sucessful allocations must have the allocation metadata set correctly.")]
     fn try_allocate_once(&self) -> Result<Option<LinearRef>, i32> {
         let meta_ptr: *mut SpanMetadata = self.bump.load(Ordering::Acquire);
 
@@ -192,17 +244,21 @@ impl Press {
             }
         }
 
-        // Either we didn't find any span metadata, and bump
+        // Either we didn't find any span metadata, or bump
         // allocation failed.  Either way, let's try to put
         // a new span in.
-        //
-        // TODO: log failures somewhere.
         self.try_replace_span(meta_ptr).map(|_| None)
     }
 
     #[ensures(ret.is_some() ->
-	      debug_type_map::is_class(self.class, ret.as_ref().unwrap()).is_ok(),
-	      "On success, the new allocation has the correct type.")]
+              debug_allocation_map::can_be_allocated(self.class, ret.as_ref().unwrap().get()).is_ok(),
+              "Successful allocations are fresh, or match the class and avoid double-allocation.")]
+    #[ensures(ret.is_some() ->
+              debug_type_map::is_class(self.class, ret.as_ref().unwrap()).is_ok(),
+              "On success, the new allocation has the correct type.")]
+    #[ensures(ret.is_some() ->
+              check_allocation(self.class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+              "Sucessful allocations must have the allocation metadata set correctly.")]
     pub fn allocate_one_object(&self) -> Option<LinearRef> {
         loop {
             match self.try_allocate_once() {

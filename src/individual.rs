@@ -34,12 +34,12 @@ use crate::press;
 impl Class {
     /// Attempts to return a newly allocated object for this `Class`.
     #[ensures(ret.is_some() ->
-	      debug_allocation_map::mark_allocated(self, ret.as_ref().unwrap()).is_ok(),
-	      "Successful allocations match the class and avoid double-allocation.")]
+              debug_allocation_map::mark_allocated(self, ret.as_ref().unwrap()).is_ok(),
+              "Successful allocations match the class and avoid double-allocation.")]
     #[ensures(ret.is_some() -> debug_type_map::ptr_is_class(self, ret.as_ref().unwrap()).is_ok(),
-	      "Successful allocations come from an address of the correct class.")]
+              "Successful allocations come from an address of the correct class.")]
     #[ensures(ret.is_some() -> press::check_allocation(self, ret.as_ref().unwrap().as_ptr() as usize).is_ok(),
-	      "Sucessful allocations must have the allocation metadata set correctly.")]
+              "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(always)]
     pub fn allocate(self) -> Option<NonNull<c_void>> {
         cache::allocate(self).map(|x| x.convert_to_non_null())
@@ -47,9 +47,9 @@ impl Class {
 
     /// Marks an object returned by `allocate` as ready for reuse.
     #[requires(debug_allocation_map::mark_released(self, &block).is_ok(),
-	       "Released blocks must match the class and not double-free.")]
+               "Released blocks must match the class and not double-free.")]
     #[requires(debug_type_map::ptr_is_class(self, &block).is_ok(),
-	       "Released blocks come from an address of the correct class.")]
+               "Released blocks come from an address of the correct class.")]
     #[inline(always)]
     pub fn release(self, block: NonNull<c_void>) {
         press::check_allocation(self, block.as_ptr() as usize)
@@ -62,11 +62,14 @@ impl ClassInfo {
     /// The `cache` calls into this slow path when its thread-local
     /// storage is being deinitialised.
     #[ensures(ret.is_some() ->
-	      debug_allocation_map::can_be_allocated(self.id, ret.as_ref().unwrap().get()).is_ok(),
-	      "Successful allocations are fresh, or match the class and avoid double-allocation.")]
+              debug_allocation_map::can_be_allocated(self.id, ret.as_ref().unwrap().get()).is_ok(),
+              "Successful allocations are fresh, or match the class and avoid double-allocation.")]
     #[ensures(ret.is_some() ->
-	      debug_type_map::is_class(self.id, ret.as_ref().unwrap()).is_ok(),
-	      "Successful allocations come from an address of the correct class.")]
+              debug_type_map::is_class(self.id, ret.as_ref().unwrap()).is_ok(),
+              "Successful allocations come from an address of the correct class.")]
+    #[ensures(ret.is_some() ->
+              press::check_allocation(self.id, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+              "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn allocate_slow(&self) -> Option<LinearRef> {
         if let Some(mut mag) = self.get_cached_magazine() {
@@ -83,9 +86,11 @@ impl ClassInfo {
     /// The `cache` calls into this slow path when its thread-local
     /// storage is being deinitialised.
     #[requires(debug_allocation_map::has_been_released(self.id, block.get()).is_ok(),
-	       "Slow-released blocks went through `Class::release`.")]
+               "Slow-released blocks went through `Class::release`.")]
     #[requires(debug_type_map::is_class(self.id, &block).is_ok(),
-	       "Released blocks come from an address of the correct class.")]
+               "Released blocks come from an address of the correct class.")]
+    #[requires(press::check_allocation(self.id, block.get().as_ptr() as usize).is_ok(),
+               "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn release_slow(&self, block: LinearRef) {
         let mut mag = self.allocate_non_full_magazine();

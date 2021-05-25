@@ -25,6 +25,11 @@ use crate::debug_allocation_map;
     feature = "check_contracts"
 ))]
 use crate::debug_type_map;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use crate::press;
 
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
@@ -60,8 +65,12 @@ thread_local!(static CACHE: RefCell<Cache> = RefCell::new(Cache::new()));
 #[ensures(ret.is_some() ->
           debug_allocation_map::can_be_allocated(class, ret.as_ref().unwrap().get()).is_ok(),
           "Successful allocations must be in the correct class and not double allocate")]
-#[ensures(ret.is_some() -> debug_type_map::is_class(class, ret.as_ref().unwrap()).is_ok(),
+#[ensures(ret.is_some() ->
+          debug_type_map::is_class(class, ret.as_ref().unwrap()).is_ok(),
           "Successful allocations must match the class of the address range.")]
+#[ensures(ret.is_some() ->
+          press::check_allocation(class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+          "Sucessful allocations must have the allocation metadata set correctly.")]
 #[inline(always)]
 pub fn allocate(class: Class) -> Option<LinearRef> {
     CACHE
@@ -74,6 +83,8 @@ pub fn allocate(class: Class) -> Option<LinearRef> {
            "Blocks passed to `release` must have already been marked as released.")]
 #[requires(debug_type_map::is_class(class, &block).is_ok(),
            "Deallocated blocks must match the class of the address range.")]
+#[requires(press::check_allocation(class, block.get().as_ptr() as usize).is_ok(),
+          "Deallocated block must have the allocation metadata set correctly.")]
 #[inline(always)]
 pub fn release(class: Class, block: LinearRef) {
     let mut cell = Some(block);
@@ -133,6 +144,14 @@ impl Cache {
             }
         }
 
+        // All magazines must be in a good state, and only contain
+        // *available* allocations for the correct class.
+        for class_cache in &self.per_class {
+            class_cache
+                .mag
+                .check_rep(class_cache.info.map(|info| info.id))?;
+        }
+
         Ok(())
     }
 
@@ -174,6 +193,9 @@ impl Cache {
               "Successful allocations must be from the correct class, and not double allocate.")]
     #[ensures(ret.is_some() -> debug_type_map::is_class(class, ret.as_ref().unwrap()).is_ok(),
               "Successful allocations must match the class of the address range.")]
+    #[ensures(ret.is_some() ->
+              press::check_allocation(class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+              "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(always)]
     fn allocate(&mut self, class: Class) -> Option<LinearRef> {
         let index = class.id().get() as usize;
@@ -201,6 +223,8 @@ impl Cache {
                "A released block for `class` must have been marked as such.")]
     #[requires(debug_type_map::is_class(class, &block).is_ok(),
                "Deallocated blocks must match the class of the address range.")]
+    #[requires(press::check_allocation(class, block.get().as_ptr() as usize).is_ok(),
+               "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(always)]
     fn release(&mut self, class: Class, block: LinearRef) {
         let index = class.id().get() as usize;

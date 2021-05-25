@@ -314,6 +314,8 @@ impl<'a> AllocatedChunk<'a> {
     }
 
     /// Attempts to carve out a span + metadata in `[base, base + size)`.
+    ///
+    /// TODO: Test the core of this function symbolically.
     fn new_from_range(
         mapper: &'a dyn Mapper,
         base: NonZeroUsize,
@@ -456,6 +458,10 @@ impl<'a> AllocatedChunk<'a> {
     /// Attempts to allocate the chunk, and calls `f` if that succeeds.
     ///
     /// If `f` fails, releases the chunk; if `f` succeeds, commits it.
+    #[ensures(ret.is_ok() == debug_arange_map::is_metadata(old(self.meta as usize), METADATA_PAGE_SIZE).is_ok(),
+               "The metadata region is marked as such on success.")]
+    #[ensures(ret.is_ok() == debug_arange_map::is_data(old(self.data as usize), DATA_ALIGNMENT).is_ok(),
+               "The data region is marked as such on success.")]
     pub fn call_with_chunk<T>(self, f: impl FnOnce(&Self) -> Result<T, i32>) -> Result<T, i32> {
         self.check_rep();
         self.allocate()?;
@@ -480,6 +486,10 @@ impl<'a> AllocatedChunk<'a> {
     }
 
     /// Backs the data and metadata region with memory.
+    #[ensures(debug_arange_map::is_metadata(self.meta as usize, METADATA_PAGE_SIZE).is_ok(),
+               "The metadata region is marked as such.")]
+    #[ensures(debug_arange_map::is_data(self.data as usize, DATA_ALIGNMENT).is_ok(),
+               "The data region is marked as such.")]
     fn allocate(&self) -> Result<(), i32> {
         // Ensures the region containing [begin, begin + size) is
         // backed by memory, by rounding outward to a page.
@@ -518,6 +528,10 @@ impl<'a> AllocatedChunk<'a> {
     }
 
     /// Releases any slop around the allocated memory.
+    #[invariant(debug_arange_map::is_metadata(self.meta as usize, METADATA_PAGE_SIZE).is_ok(),
+               "The metadata region is marked as such.")]
+    #[invariant(debug_arange_map::is_data(self.data as usize, DATA_ALIGNMENT).is_ok(),
+               "The data region is marked as such.")]
     fn commit(self) -> Result<(), i32> {
         fn release(mapper: &dyn Mapper, begin: usize, end: usize) -> Result<(), i32> {
             let page_size = mapper.page_size();
@@ -543,6 +557,14 @@ impl<'a> AllocatedChunk<'a> {
 
 impl Mill {
     /// Returns a fresh chunk from `mapper`.
+    #[ensures(ret.is_ok() ->
+              debug_arange_map::is_metadata(ret.as_ref().unwrap().meta as usize,
+                                            METADATA_PAGE_SIZE).is_ok(),
+              "The metadata region is marked as such.")]
+    #[ensures(ret.is_ok() ->
+              debug_arange_map::is_data(ret.as_ref().unwrap().spans,
+                                        ret.as_ref().unwrap().span_count * SPAN_ALIGNMENT).is_ok(),
+              "The data region is marked as such.")]
     fn allocate_chunk(mapper: &dyn Mapper) -> Result<Chunk, i32> {
         AllocatedChunk::new(mapper)?.call_with_chunk(|chunk| {
             let meta = unsafe { chunk.meta.as_mut() }.expect("must be valid");
@@ -558,7 +580,26 @@ impl Mill {
     /// Attempts to chop a new set of spans from a chunk.
     ///
     /// On success, it will contain at least `min` spans, and up to `desired` spans.
+    #[requires(debug_arange_map::is_metadata(chunk.meta as usize,
+                                             METADATA_PAGE_SIZE).is_ok(),
+               "The metadata region must be marked as such")]
+    #[requires(debug_arange_map::is_data(chunk.spans as usize,
+                                         chunk.span_count * SPAN_ALIGNMENT).is_ok(),
+               "The data region must be marked as such")]
+    #[requires(min <= DATA_ALIGNMENT / SPAN_ALIGNMENT,
+        "The request must fit in a data chunk.")]
+    #[ensures(ret.is_none() -> chunk.next_free_span == old(chunk.next_free_span),
+              "Must leave the chunk untouched on success")]
+    #[ensures(ret.is_some() ->
+              ret.as_ref().unwrap().data_size >= min * SPAN_ALIGNMENT,
+              "Must allocate enough for the min size on success.")]
+    #[ensures(ret.is_some() ->
+              chunk.next_free_span == old(chunk.next_free_span) + ret.as_ref().unwrap().data_size / SPAN_ALIGNMENT,
+              "Must consume the bump pointer on success.")]
     fn allocate_span(chunk: &mut Chunk, min: usize, desired: usize) -> Option<MilledRange> {
+        // Inspect this routine to confirm that the meta and data
+        // regions are allocated according to `next_free_span`.  The
+        // postconditions are a mess of casts.
         if chunk.next_free_span >= chunk.span_count {
             return None;
         }
@@ -597,6 +638,8 @@ impl Mill {
     /// # Errors
     ///
     /// Returns `Err` on mapping failures (OOM-like conditions).
+    #[requires(min_size <= MAX_SPAN_SIZE)]
+    #[requires(min_size <= desired_size.unwrap_or(min_size))]
     pub fn get_span(
         &self,
         min_size: usize,
