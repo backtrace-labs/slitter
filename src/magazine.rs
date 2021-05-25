@@ -168,6 +168,7 @@ impl MagazineImpl {
     #[invariant(self.check_rep(), "Representation makes sense.")]
     #[ensures(old(self.is_empty()) == ret.is_none(),
               "We only fail to pop from empty magazines.")]
+    #[inline(always)]
     pub fn get(&mut self) -> Option<LinearRef> {
         if self.num_allocated == 0 {
             return None;
@@ -187,6 +188,7 @@ impl MagazineImpl {
               "On success, `freed` is in the magazine.")]
     #[ensures(old(self.is_full()) == ret.is_some(),
               "We only fail to push to full magazines.")]
+    #[inline(always)]
     pub fn put(&mut self, freed: LinearRef) -> Option<LinearRef> {
         let index = self.num_allocated;
         if index >= MAGAZINE_SIZE {
