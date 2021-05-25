@@ -251,6 +251,13 @@ impl Default for MagazineImpl {
     }
 }
 
+/// We should only drop empty magazines.
+impl Drop for MagazineImpl {
+    #[requires(self.num_allocated == 0,
+	       "Only empty magazines can be dropped.")]
+    fn drop(&mut self) {}
+}
+
 impl MagazineStack {
     pub fn new() -> Self {
         Self {
