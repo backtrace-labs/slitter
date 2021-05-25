@@ -13,6 +13,12 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use std::ffi::c_void;
+use std::mem::MaybeUninit;
 use std::sync::Mutex;
 
 #[cfg(any(
@@ -56,7 +62,7 @@ struct MagazineImpl {
     /// the first `num_allocated` indices have NonNull values,
     /// and the remainder are undefined.
     num_allocated: u32,
-    allocations: [Option<LinearRef>; MAGAZINE_SIZE as usize],
+    allocations: [MaybeUninit<LinearRef>; MAGAZINE_SIZE as usize],
 
     /// Single linked list linkage.
     link: Option<Box<MagazineImpl>>,
@@ -101,12 +107,12 @@ impl Magazine {
 
         // If we have an allocation class, the types must match.
         if let Some(class) = maybe_class {
-            for maybe_alloc in &self.0.allocations {
-                if let Some(alloc) = maybe_alloc {
-                    debug_allocation_map::can_be_allocated(class, alloc.get())?;
-                    debug_type_map::is_class(class, alloc)?;
-                    press::check_allocation(class, alloc.get().as_ptr() as usize)?;
-                }
+            for i in 0..self.0.num_allocated {
+                let alloc = unsafe { &*self.0.allocations[i as usize].as_ptr() };
+
+                debug_allocation_map::can_be_allocated(class, alloc.get())?;
+                debug_type_map::is_class(class, alloc)?;
+                press::check_allocation(class, alloc.get().as_ptr() as usize)?;
             }
         }
 
@@ -151,23 +157,45 @@ impl MagazineImpl {
         feature = "check_contracts"
     ))]
     fn check_rep(&self) -> bool {
-        let allocated = self.num_allocated as usize;
+        // Everything before `allocated` must be populated, and thus
+        // non-NULL.  Everything at or after `allocated` is garbage
+        // and must not be read.
+        self.allocations
+            .iter()
+            .take(self.num_allocated as usize)
+            .all(|entry| !entry.as_ptr().is_null())
+    }
 
-        // Everything before `allocated` must be populated,
-        // and everything else empty.
-        self.allocations.iter().enumerate().all(|(i, entry)| {
-            if i < allocated {
-                entry.is_some()
-            } else {
-                entry.is_none()
+    /// Contract-only: returns the pointer at the top of the stack, of NULL if none.
+    #[cfg(any(
+        all(test, feature = "check_contracts_in_tests"),
+        feature = "check_contracts"
+    ))]
+    fn peek(&self) -> *mut c_void {
+        if self.num_allocated == 0 {
+            std::ptr::null::<c_void>() as *mut _
+        } else {
+            unsafe {
+                self.allocations[self.num_allocated as usize - 1]
+                    .as_ptr()
+                    .as_ref()
             }
-        })
+            .unwrap()
+            .get()
+            .as_ptr()
+        }
     }
 
     /// Attempts to get an unused block from the magazine.
     #[invariant(self.check_rep(), "Representation makes sense.")]
     #[ensures(old(self.is_empty()) == ret.is_none(),
               "We only fail to pop from empty magazines.")]
+    #[ensures(ret.is_none() -> self.num_allocated == old(self.num_allocated),
+              "We don't change the stack size on failure.")]
+    #[ensures(ret.is_some() -> self.num_allocated == old(self.num_allocated) - 1,
+              "Must remove one element on success.")]
+    #[ensures(ret.is_some() -> ret.as_ref().unwrap().get().as_ptr() == old(self.peek()),
+              "Must return the top of stack on success.")]
     #[inline(always)]
     pub fn get(&mut self) -> Option<LinearRef> {
         if self.num_allocated == 0 {
@@ -175,16 +203,22 @@ impl MagazineImpl {
         }
 
         self.num_allocated -= 1;
-        self.allocations[self.num_allocated as usize].take()
+        let mut old = MaybeUninit::uninit();
+        std::mem::swap(&mut old, &mut self.allocations[self.num_allocated as usize]);
+        Some(unsafe { old.assume_init() })
     }
 
     /// Attempts to put an unused block back in the magazine.
     ///
     /// Returns that unused block on failure.
     #[invariant(self.check_rep())]
+    #[ensures(ret.is_none() -> self.num_allocated == old(self.num_allocated) + 1,
+              "We add one element on success.")]
+    #[ensures(ret.is_some() -> self.num_allocated == old(self.num_allocated),
+              "We don't change the stack on failure.")]
     #[ensures(ret.is_some() -> old(freed.get().as_ptr()) == ret.as_ref().unwrap().get().as_ptr(),
               "On failure, we return `freed`.")]
-    #[ensures(ret.is_none() -> old(freed.get().as_ptr()) == self.allocations[self.num_allocated as usize - 1].as_ref().unwrap().get().as_ptr(),
+    #[ensures(ret.is_none() -> old(freed.get().as_ptr()) == self.peek(),
               "On success, `freed` is in the magazine.")]
     #[ensures(old(self.is_full()) == ret.is_some(),
               "We only fail to push to full magazines.")]
@@ -196,7 +230,9 @@ impl MagazineImpl {
         }
 
         self.num_allocated += 1;
-        self.allocations[index as usize] = Some(freed);
+        unsafe {
+            self.allocations[index as usize].as_mut_ptr().write(freed);
+        }
         None
     }
 
@@ -209,7 +245,7 @@ impl MagazineImpl {
 
         while count < MAGAZINE_SIZE as usize {
             match allocator() {
-                Some(block) => self.allocations[count] = Some(block),
+                Some(block) => unsafe { self.allocations[count].as_mut_ptr().write(block) },
                 None => break,
             }
 
@@ -245,7 +281,9 @@ impl Default for MagazineImpl {
 
         Self {
             num_allocated: 0,
-            allocations: Default::default(),
+            // Same to leave this as garbage: we never read past
+            // `num_allocated`.
+            allocations: unsafe { MaybeUninit::uninit().assume_init() },
             link: None,
         }
     }
@@ -254,7 +292,7 @@ impl Default for MagazineImpl {
 /// We should only drop empty magazines.
 impl Drop for MagazineImpl {
     #[requires(self.num_allocated == 0,
-	       "Only empty magazines can be dropped.")]
+               "Only empty magazines can be dropped.")]
     fn drop(&mut self) {}
 }
 
