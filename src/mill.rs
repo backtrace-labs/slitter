@@ -41,14 +41,34 @@ use std::sync::atomic::AtomicUsize;
 use crate::debug_arange_map;
 
 /// Data chunks are naturally aligned to their size, 1GB.
+#[cfg(not(feature = "test_only_small_constants"))]
 const DATA_ALIGNMENT: usize = 1 << 30;
 /// We use 2 MB sizes to enable huge pages.  3 guard superpages + 1
 /// metadata superpage per chunk is still less than 1% overhead.
+#[cfg(not(feature = "test_only_small_constants"))]
 const GUARD_PAGE_SIZE: usize = 2 << 20;
+#[cfg(not(feature = "test_only_small_constants"))]
 const METADATA_PAGE_SIZE: usize = 2 << 20;
 
 /// Spans are aligned to 16 KB, within the chunk.
+#[cfg(not(feature = "test_only_small_constants"))]
 pub const SPAN_ALIGNMENT: usize = 16 << 10;
+
+// Try to shrink everything by ~512.  We have to bump
+// up the metadata page size a little, since we also
+// want a smaller span alignment (and the metadata
+// array must include one entry per potential span).
+// Keep `GUARD_PAGE_SIZE` equal to `METADATA_PAGE_SIZE`
+// to better match production.
+#[cfg(feature = "test_only_small_constants")]
+const DATA_ALIGNMENT: usize = 2 << 20;
+#[cfg(feature = "test_only_small_constants")]
+const GUARD_PAGE_SIZE: usize = 16 << 10;
+#[cfg(feature = "test_only_small_constants")]
+const METADATA_PAGE_SIZE: usize = 16 << 10;
+
+#[cfg(feature = "test_only_small_constants")]
+pub const SPAN_ALIGNMENT: usize = 4 << 10;
 
 /// Maximum size in bytes we can service for a single span.  The
 /// higher this value, the more bytes we may lose to fragmentation
@@ -60,7 +80,11 @@ pub const MAX_SPAN_SIZE: usize = DATA_ALIGNMENT / 16;
 
 /// By default, we want to carve our *nearly* 1 MB spans: the slight
 /// misalignment spreads out our metadata to different cache sets.
+#[cfg(not(feature = "test_only_small_constants"))]
 pub const DEFAULT_DESIRED_SPAN_SIZE: usize = (1 << 20) - SPAN_ALIGNMENT;
+
+#[cfg(feature = "test_only_small_constants")]
+pub const DEFAULT_DESIRED_SPAN_SIZE: usize = (8 << 10) - SPAN_ALIGNMENT;
 
 static_assertions::const_assert!(DEFAULT_DESIRED_SPAN_SIZE <= MAX_SPAN_SIZE);
 

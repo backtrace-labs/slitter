@@ -8,6 +8,7 @@ edition = "2018"
 default = ["check_contracts_in_tests"]
 check_contracts_in_tests = []  # Enable contract checking for cfg(test).
 check_contracts = ["contracts"]  # Enable contract checking.
+test_only_small_constants = []  # Shrink constants to cover more conditions.
 
 [dependencies]
 contracts = { version = "0.6", optional = true }
@@ -23,3 +24,11 @@ cc = "1"
 contracts = { version = "0.6" }  # Only used in tests.
 proptest = "1"  # Run with `PROPTEST_FORK=true cargo test`, otherwise
                 # global state fills up and slows down debug checks.
+                # Also `--features='test_only_small_constants'` to help
+                # exercise more edge cases.
+
+[package.metadata.x]  # `cargo install cargo-x`, then `cargo x test`, etc.
+test = "PROPTEST_FORK=true cargo test"
+test_opt = "PROPTEST_FORK=true cargo test --release"
+test_release = "PROPTEST_FORK=true cargo test --release --no-default-features"
+test_small_constants = "PROPTEST_FORK=true cargo test --features='test_only_small_constants'"

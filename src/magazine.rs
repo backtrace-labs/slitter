@@ -38,7 +38,11 @@ use crate::Class;
 
 use crate::linear_ref::LinearRef;
 
+#[cfg(not(feature = "test_only_small_constants"))]
 const MAGAZINE_SIZE: u32 = 30;
+
+#[cfg(feature = "test_only_small_constants")]
+const MAGAZINE_SIZE: u32 = 6;
 
 /// A Magazine is a thin wrapper around MagazineImpl: the wrapping
 /// lets us impose a tighter contract on the interface used in the
