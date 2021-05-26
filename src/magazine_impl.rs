@@ -66,6 +66,7 @@ pub struct MagazineImpl {
 impl MagazineImpl {
     // Disabled precondition: lifetimes are too hard for contracts.
     // #[requires(inner.link.is_none())]
+    #[inline(always)]
     pub fn new(inner: &'static mut MagazineStorage) -> Self {
         #[cfg(any(
             all(test, feature = "check_contracts_in_tests"),
@@ -81,6 +82,7 @@ impl MagazineImpl {
 
     // Disabled postcondition: lifetimes are too hard for contracts.
     // #[ensures(ret.link.is_none())]
+    #[inline(always)]
     pub fn storage(self) -> &'static mut MagazineStorage {
         #[cfg(any(
             all(test, feature = "check_contracts_in_tests"),

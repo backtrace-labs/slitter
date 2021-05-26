@@ -11,47 +11,64 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
+use std::mem::MaybeUninit;
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use crate::magazine::Magazine;
 use crate::magazine_impl::MagazineImpl;
 use crate::magazine_impl::MagazineStorage;
 
-/// A `MagazineStack` is a single-linked intrusive stack of magazines.
+/// A `MagazineStack` is a single-linked stack with a generation
+/// counter to protect against ABA.  We do not have to worry
+/// about reclamation races because `MagazineStorage` are immortal:
+/// `Rack`s never free them, and simply cache empty magazines in
+/// a `MagazineStack`.
+#[repr(C)]
+#[repr(align(16))]
 pub struct MagazineStack {
-    inner: Mutex<Option<NonNull<MagazineStorage>>>,
+    top_of_stack: AtomicPtr<MagazineStorage>,
+    generation: AtomicUsize,
+}
+
+// These are declared in stack.h
+extern "C" {
+    fn slitter__stack_push(stack: &MagazineStack, mag: NonNull<MagazineStorage>);
+    fn slitter__stack_pop(stack: &MagazineStack, out_mag: *mut NonNull<MagazineStorage>) -> bool;
 }
 
 impl MagazineStack {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(None),
+            top_of_stack: Default::default(),
+            generation: AtomicUsize::new(0),
         }
     }
 
     #[requires(mag.check_rep(None).is_ok(),
                "Magazine must make sense.")]
+    #[inline(always)]
     pub fn push(&self, mag: Magazine) {
-        let storage = mag.0.storage();
-
-        let mut stack = self.inner.lock().unwrap();
-
-        storage.link = stack.take();
-        *stack = Some(storage.into())
+        unsafe { slitter__stack_push(&self, mag.0.storage().into()) };
     }
 
     #[ensures(ret.is_some() ->
               ret.as_ref().unwrap().check_rep(None).is_ok(),
               "Magazine should make sense.")]
+    #[inline(always)]
     pub fn pop(&self) -> Option<Magazine> {
-        let mut stack = self.inner.lock().unwrap();
+        if self.top_of_stack.load(Ordering::Relaxed).is_null() {
+            return None;
+        }
 
-        if let Some(mag_ptr) = stack.take() {
-            let mag: &'static mut _ = unsafe { &mut *mag_ptr.as_ptr() };
-            std::mem::swap(&mut mag.link, &mut *stack);
-            assert!(mag.link.is_none());
-            Some(Magazine(MagazineImpl::new(mag)))
+        let mut dst: MaybeUninit<NonNull<MagazineStorage>> = MaybeUninit::uninit();
+        if unsafe { slitter__stack_pop(&self, dst.as_mut_ptr()) } {
+            // If `stack_pop` returns true, `dst` must contain a valid owning pointer
+            // to a `MagazineStorage`.
+            let storage = unsafe { &mut *dst.assume_init().as_ptr() };
+            Some(Magazine(MagazineImpl::new(storage)))
         } else {
             None
         }
