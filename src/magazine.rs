@@ -13,6 +13,8 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
+use std::mem::MaybeUninit;
+
 #[cfg(any(
     all(test, feature = "check_contracts_in_tests"),
     feature = "check_contracts"
@@ -71,6 +73,7 @@ impl Magazine {
     }
 
     /// Attempts to get an unused block from the magazine.
+    #[invariant(self.check_rep(None).is_ok())]
     #[inline(always)]
     pub fn get(&mut self) -> Option<LinearRef> {
         self.0.get()
@@ -79,15 +82,23 @@ impl Magazine {
     /// Attempts to put an unused block back in the magazine.
     ///
     /// Returns that unused block on failure.
+    #[invariant(self.check_rep(None).is_ok())]
     #[inline(always)]
     pub fn put(&mut self, freed: LinearRef) -> Option<LinearRef> {
         self.0.put(freed)
     }
 
-    /// Fills `self` with allocations returned by `allocator`
+    /// Returns a slice for the unused slots in the magazine
     #[inline(always)]
-    pub fn populate(&mut self, allocator: impl FnMut() -> Option<LinearRef>) {
-        self.0.populate(allocator)
+    fn get_unpopulated(&mut self) -> &mut [MaybeUninit<LinearRef>] {
+        self.0.get_unpopulated()
+    }
+
+    /// Marks the first `count` unused slots in the magazine as now populated.
+    #[invariant(self.check_rep(None).is_ok())]
+    #[inline(always)]
+    fn commit_populated(&mut self, count: usize) {
+        self.0.commit_populated(count)
     }
 
     #[inline(always)]
@@ -168,9 +179,9 @@ impl crate::class::ClassInfo {
             return allocated;
         }
 
-        let allocated = self.press.allocate_one_object()?;
-        mag.populate(|| self.press.allocate_one_object());
-        Some(allocated)
+        let (count, allocated) = self.press.allocate_many_objects(mag.get_unpopulated());
+        mag.commit_populated(count);
+        allocated
     }
 
     /// Acquires ownership of `spilled` and all cached allocations from

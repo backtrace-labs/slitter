@@ -27,6 +27,7 @@ use disabled_contracts::*;
 
 use std::alloc::Layout;
 use std::ffi::c_void;
+use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::AtomicUsize;
@@ -267,5 +268,50 @@ impl Press {
                 _ => continue,
             }
         }
+    }
+
+    /// Attempts to allocate multiple objects: first the second return
+    /// value, and then as many elements in `dst` as possible.
+    ///
+    /// Returns the number of elements populated in `dst` (starting
+    /// at low indices), and an allocated object if possible.
+    #[ensures(ret.1.is_some() ->
+              debug_allocation_map::can_be_allocated(self.class, ret.1.as_ref().unwrap().get()).is_ok(),
+              "Successful allocations are fresh, or match the class and avoid double-allocation.")]
+    #[ensures(ret.1.is_some() ->
+              debug_type_map::is_class(self.class, ret.1.as_ref().unwrap()).is_ok(),
+              "On success, the new allocation has the correct type.")]
+    #[ensures(ret.1.is_some() ->
+              check_allocation(self.class, ret.1.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+              "Sucessful allocations must have the allocation metadata set correctly.")]
+    #[ensures(ret.1.is_none() -> ret.0 == 0,
+              "We always try to satisfy the return value first.")]
+    // We don't check `dst` because the contract expression would be
+    // unsafe, but it's the same as `ret.1.is_some()` for all
+    // populated elements.
+    //
+    // We do check the same invariants in the target `Magazine` via
+    // `ClassInfo::refill_magazine`.
+    pub fn allocate_many_objects(
+        &self,
+        dst: &mut [MaybeUninit<LinearRef>],
+    ) -> (usize, Option<LinearRef>) {
+        let ret = self.allocate_one_object();
+
+        if ret.is_none() {
+            return (0, ret);
+        }
+
+        let mut count = 0;
+        for uninit in dst.iter_mut() {
+            if let Some(new) = self.allocate_one_object() {
+                unsafe { uninit.as_mut_ptr().write(new) };
+                count += 1;
+            } else {
+                break;
+            }
+        }
+
+        (count, ret)
     }
 }

@@ -211,23 +211,19 @@ impl MagazineImpl {
         None
     }
 
-    /// Fills `self` with allocations returned by `allocator`
+    /// Returns a slice for the unused slots in the magazine
+    // No invariant: they confuse the borrow checker.
+    #[inline(always)]
+    pub fn get_unpopulated(&mut self) -> &mut [MaybeUninit<LinearRef>] {
+        &mut self.inner.allocations[self.num_allocated as usize..]
+    }
+
+    /// Marks the first `count` unused slots in the magazine as now populated.
     #[invariant(self.check_rep())]
-    #[ensures(self.num_allocated >= old(self.num_allocated),
-              "We should never lose allocations.")]
-    pub fn populate(&mut self, mut allocator: impl FnMut() -> Option<LinearRef>) {
-        let mut count = self.num_allocated as usize;
-
-        while count < MAGAZINE_SIZE as usize {
-            match allocator() {
-                Some(block) => unsafe { self.inner.allocations[count].as_mut_ptr().write(block) },
-                None => break,
-            }
-
-            count += 1;
-        }
-
-        self.num_allocated = count as u32;
+    #[requires(count <= MAGAZINE_SIZE as usize - self.num_allocated as usize)]
+    #[inline(always)]
+    pub fn commit_populated(&mut self, count: usize) {
+        self.num_allocated += count as u32;
     }
 
     #[invariant(self.check_rep())]
@@ -347,36 +343,6 @@ fn magazine_fill_up() {
     // So all subsequent `get()` calls will return None.
     assert_eq!(mag.get(), None);
     assert_eq!(mag.get(), None);
-    assert_eq!(mag.num_allocated, 0);
-
-    rack.release_empty_magazine(crate::magazine::Magazine(mag));
-}
-
-#[test]
-fn magazine_populate() {
-    let rack = crate::rack::get_default_rack();
-    let mut mag = rack.allocate_empty_magazine().0;
-
-    // Fill up the magazine.
-    let mut count = 0usize;
-    mag.populate(|| {
-        count += 1;
-        Some(LinearRef::from_address(count))
-    });
-
-    assert_eq!(mag.num_allocated, MAGAZINE_SIZE);
-
-    // We should pop in LIFO order.
-    for i in (1..=MAGAZINE_SIZE).rev() {
-        assert_eq!(mag.num_allocated, i);
-        let popped = mag.get().expect("has value");
-        assert_eq!(popped.get().as_ptr() as usize, i as usize);
-        std::mem::forget(popped);
-
-        assert_eq!(mag.num_allocated, i - 1);
-    }
-
-    // And now the magazine should be empty.
     assert_eq!(mag.num_allocated, 0);
 
     rack.release_empty_magazine(crate::magazine::Magazine(mag));
