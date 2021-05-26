@@ -21,7 +21,7 @@ use std::ffi::CStr;
 use std::num::NonZeroU32;
 use std::os::raw::c_char;
 
-use crate::magazine::MagazineStack;
+use crate::magazine_stack::MagazineStack;
 use crate::press::Press;
 
 /// External callers interact with slitter allocation classes via this

@@ -4,6 +4,7 @@ mod individual;
 mod linear_ref;
 mod magazine;
 mod magazine_impl;
+mod magazine_stack;
 mod map;
 mod mill;
 mod press;

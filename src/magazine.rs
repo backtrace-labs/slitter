@@ -13,8 +13,6 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
-use std::sync::Mutex;
-
 #[cfg(any(
     all(test, feature = "check_contracts_in_tests"),
     feature = "check_contracts"
@@ -44,11 +42,6 @@ use crate::magazine_impl::MagazineImpl;
 /// allocator, while keeping the internal implementation testable.
 #[repr(transparent)]
 pub struct Magazine(pub(crate) Box<MagazineImpl>);
-
-/// A `MagazineStack` is a single-linked intrusive stack of magazines.
-pub struct MagazineStack {
-    inner: Mutex<Option<Box<MagazineImpl>>>,
-}
 
 impl Magazine {
     /// Checks that current object's state is valid.
@@ -112,38 +105,6 @@ impl Magazine {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-}
-impl MagazineStack {
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(None),
-        }
-    }
-
-    #[requires(mag.check_rep(None).is_ok(),
-               "Magazine must make sense.")]
-    fn push(&self, mut mag: Magazine) {
-        assert!(mag.0.link.is_none());
-        let mut stack = self.inner.lock().unwrap();
-
-        mag.0.link = stack.take();
-        *stack = Some(mag.0)
-    }
-
-    #[ensures(ret.is_some() ->
-              ret.as_ref().unwrap().check_rep(None).is_ok(),
-              "Magazine should make sense.")]
-    fn pop(&self) -> Option<Magazine> {
-        let mut stack = self.inner.lock().unwrap();
-
-        if let Some(mut mag) = stack.take() {
-            std::mem::swap(&mut mag.link, &mut *stack);
-            assert!(mag.link.is_none());
-            Some(Magazine(mag))
-        } else {
-            None
-        }
     }
 }
 
@@ -262,21 +223,4 @@ impl crate::class::ClassInfo {
             self.partial_mags.push(mag);
         }
     }
-}
-
-#[test]
-fn magazine_stack_smoke_test() {
-    let rack = crate::rack::get_default_rack();
-    let stack = MagazineStack::new();
-
-    stack.push(rack.allocate_empty_magazine());
-    stack.push(rack.allocate_empty_magazine());
-
-    assert!(stack.pop().is_some());
-
-    stack.push(rack.allocate_empty_magazine());
-    assert!(stack.pop().is_some());
-    assert!(stack.pop().is_some());
-
-    assert!(stack.pop().is_none());
 }
