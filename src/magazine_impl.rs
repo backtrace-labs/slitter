@@ -19,8 +19,10 @@ use disabled_contracts::*;
 ))]
 use std::ffi::c_void;
 
-use crate::linear_ref::LinearRef;
 use std::mem::MaybeUninit;
+use std::ptr::NonNull;
+
+use crate::linear_ref::LinearRef;
 
 #[cfg(not(feature = "test_only_small_constants"))]
 const MAGAZINE_SIZE: u32 = 30;
@@ -37,7 +39,7 @@ pub struct MagazineImpl {
     pub(crate) allocations: [MaybeUninit<LinearRef>; MAGAZINE_SIZE as usize],
 
     /// Single linked list linkage.
-    pub(crate) link: Option<Box<MagazineImpl>>,
+    pub(crate) link: Option<NonNull<MagazineImpl>>,
 }
 
 impl MagazineImpl {
@@ -189,7 +191,7 @@ impl Drop for MagazineImpl {
 #[test]
 fn smoke_test_magazine() {
     let rack = crate::rack::get_default_rack();
-    let mut mag = rack.allocate_empty_magazine().0;
+    let mag = rack.allocate_empty_magazine().0;
 
     // Getting an empty magazine should return None
     assert_eq!(mag.get(), None); // mag: []
@@ -229,7 +231,7 @@ fn smoke_test_magazine() {
 #[test]
 fn magazine_fill_up() {
     let rack = crate::rack::get_default_rack();
-    let mut mag = rack.allocate_empty_magazine().0;
+    let mag = rack.allocate_empty_magazine().0;
 
     // Fill up the magazine.
     for i in 1..=MAGAZINE_SIZE {
@@ -270,7 +272,7 @@ fn magazine_fill_up() {
 #[test]
 fn magazine_populate() {
     let rack = crate::rack::get_default_rack();
-    let mut mag = rack.allocate_empty_magazine().0;
+    let mag = rack.allocate_empty_magazine().0;
 
     // Fill up the magazine.
     let mut count = 0usize;

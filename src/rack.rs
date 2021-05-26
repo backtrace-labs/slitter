@@ -28,7 +28,7 @@ pub fn get_default_rack() -> &'static Rack {
 impl Rack {
     #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
     pub fn allocate_empty_magazine(&self) -> Magazine {
-        Magazine(Box::new(Default::default()))
+        Magazine(Box::leak(Box::new(Default::default())))
     }
 
     #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]
@@ -36,6 +36,7 @@ impl Rack {
         // We can only release empty magazines.
         assert_eq!(mag.0.num_allocated, 0);
         // And now drop it.
+        unsafe { Box::from_raw(mag.0 as *mut _) };
     }
 }
 

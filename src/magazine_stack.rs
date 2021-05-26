@@ -11,6 +11,7 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
+use std::ptr::NonNull;
 use std::sync::Mutex;
 
 use crate::magazine::Magazine;
@@ -18,7 +19,7 @@ use crate::magazine_impl::MagazineImpl;
 
 /// A `MagazineStack` is a single-linked intrusive stack of magazines.
 pub struct MagazineStack {
-    inner: Mutex<Option<Box<MagazineImpl>>>,
+    inner: Mutex<Option<NonNull<MagazineImpl>>>,
 }
 
 impl MagazineStack {
@@ -30,12 +31,12 @@ impl MagazineStack {
 
     #[requires(mag.check_rep(None).is_ok(),
                "Magazine must make sense.")]
-    pub fn push(&self, mut mag: Magazine) {
+    pub fn push(&self, mag: Magazine) {
         assert!(mag.0.link.is_none());
         let mut stack = self.inner.lock().unwrap();
 
         mag.0.link = stack.take();
-        *stack = Some(mag.0)
+        *stack = Some(mag.0.into())
     }
 
     #[ensures(ret.is_some() ->
@@ -44,7 +45,8 @@ impl MagazineStack {
     pub fn pop(&self) -> Option<Magazine> {
         let mut stack = self.inner.lock().unwrap();
 
-        if let Some(mut mag) = stack.take() {
+        if let Some(mag_ptr) = stack.take() {
+            let mag: &'static mut _ = unsafe { &mut *mag_ptr.as_ptr() };
             std::mem::swap(&mut mag.link, &mut *stack);
             assert!(mag.link.is_none());
             Some(Magazine(mag))
@@ -53,6 +55,11 @@ impl MagazineStack {
         }
     }
 }
+
+// MagazineStack is safe to `Send` because we convert `NonNull`
+// to/from mutable references around the lock.
+unsafe impl Send for MagazineStack {}
+unsafe impl Sync for MagazineStack {}
 
 #[test]
 fn magazine_stack_smoke_test() {

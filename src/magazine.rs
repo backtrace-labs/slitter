@@ -41,7 +41,7 @@ use crate::magazine_impl::MagazineImpl;
 /// lets us impose a tighter contract on the interface used in the
 /// allocator, while keeping the internal implementation testable.
 #[repr(transparent)]
-pub struct Magazine(pub(crate) Box<MagazineImpl>);
+pub struct Magazine(pub(crate) &'static mut MagazineImpl);
 
 impl Magazine {
     /// Checks that current object's state is valid.
