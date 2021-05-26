@@ -35,3 +35,13 @@ void slitter__stack_push(struct stack *, struct magazine_storage *);
  * On failure, returns false.
  */
 bool slitter__stack_pop(struct stack *, struct magazine_storage **out);
+
+/**
+ * Quickly attempts to pop one element from the stack.
+ *
+ * Once success, returns true and populates the `out` pointer.
+ * On failure, returns false.
+ *
+ * Unlike `slitter__stack_pop`, this function may fail for any reason.
+ */
+bool slitter__stack_try_pop(struct stack *, struct magazine_storage **out);

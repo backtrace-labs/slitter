@@ -37,6 +37,10 @@ pub struct MagazineStack {
 extern "C" {
     fn slitter__stack_push(stack: &MagazineStack, mag: NonNull<MagazineStorage>);
     fn slitter__stack_pop(stack: &MagazineStack, out_mag: *mut NonNull<MagazineStorage>) -> bool;
+    fn slitter__stack_try_pop(
+        stack: &MagazineStack,
+        out_mag: *mut NonNull<MagazineStorage>,
+    ) -> bool;
 }
 
 impl MagazineStack {
@@ -65,6 +69,26 @@ impl MagazineStack {
 
         let mut dst: MaybeUninit<NonNull<MagazineStorage>> = MaybeUninit::uninit();
         if unsafe { slitter__stack_pop(&self, dst.as_mut_ptr()) } {
+            // If `stack_pop` returns true, `dst` must contain a valid owning pointer
+            // to a `MagazineStorage`.
+            let storage = unsafe { &mut *dst.assume_init().as_ptr() };
+            Some(Magazine(MagazineImpl::new(storage)))
+        } else {
+            None
+        }
+    }
+
+    #[ensures(ret.is_some() ->
+              ret.as_ref().unwrap().check_rep(None).is_ok(),
+              "Magazine should make sense.")]
+    #[inline(always)]
+    pub fn try_pop(&self) -> Option<Magazine> {
+        if self.top_of_stack.load(Ordering::Relaxed).is_null() {
+            return None;
+        }
+
+        let mut dst: MaybeUninit<NonNull<MagazineStorage>> = MaybeUninit::uninit();
+        if unsafe { slitter__stack_try_pop(&self, dst.as_mut_ptr()) } {
             // If `stack_pop` returns true, `dst` must contain a valid owning pointer
             // to a `MagazineStorage`.
             let storage = unsafe { &mut *dst.assume_init().as_ptr() };

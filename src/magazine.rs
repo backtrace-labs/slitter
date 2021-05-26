@@ -109,7 +109,7 @@ impl crate::class::ClassInfo {
     #[inline(never)]
     pub(crate) fn allocate_magazine(&self) -> Magazine {
         self.partial_mags
-            .pop()
+            .try_pop()
             .or_else(|| self.full_mags.pop())
             .unwrap_or_else(|| self.rack.allocate_empty_magazine())
     }
@@ -158,7 +158,7 @@ impl crate::class::ClassInfo {
     pub(crate) fn refill_magazine(&self, mag: &mut Magazine) -> Option<LinearRef> {
         // Try to get a new non-empty magazine; prefer partial mags
         // because we prefer to have 0 partial mags.
-        if let Some(mut new_mag) = self.partial_mags.pop().or_else(|| self.full_mags.pop()) {
+        if let Some(mut new_mag) = self.partial_mags.try_pop().or_else(|| self.full_mags.pop()) {
             assert!(!new_mag.is_empty());
 
             let allocated = new_mag.get();
@@ -191,7 +191,7 @@ impl crate::class::ClassInfo {
         // Get a new non-full magazine.
         let mut new_mag = self
             .partial_mags
-            .pop()
+            .try_pop()
             .unwrap_or_else(|| self.rack.allocate_empty_magazine());
 
         assert!(!new_mag.is_full());

@@ -122,3 +122,32 @@ slitter__stack_pop(struct stack *stack, struct magazine_storage **out)
 
 	return false;
 }
+
+bool
+slitter__stack_try_pop(struct stack *stack, struct magazine_storage **out)
+{
+	struct stack actual, curr, next;
+	struct magazine_storage *tos;
+
+	curr.generation = LOAD_ACQUIRE(stack->generation);
+	curr.top_of_stack = LOAD_ACQUIRE(stack->top_of_stack);
+
+	tos = curr.top_of_stack;
+	if (tos == NULL)
+		return false;
+
+	next = (struct stack) {
+		.top_of_stack = tos->link,
+		.generation = curr.generation + 1,
+	};
+
+	actual.bits = __sync_val_compare_and_swap(&stack->bits,
+	    curr.bits, next.bits);
+	if (__builtin_expect(actual.generation == curr.generation, 1)) {
+		tos->link = NULL;
+		*out = tos;
+		return true;
+	}
+
+	return false;
+}
