@@ -59,6 +59,7 @@ pub fn get_default_rack() -> &'static Rack {
 
 impl Rack {
     #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
+    #[inline(always)]
     pub fn allocate_empty_magazine(&self) -> Magazine {
         self.freelist
             .pop()
@@ -66,6 +67,7 @@ impl Rack {
     }
 
     #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]
+    #[inline(always)]
     pub fn release_empty_magazine(&self, mag: Magazine) {
         self.freelist.push(mag);
     }
