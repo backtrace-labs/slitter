@@ -130,6 +130,10 @@ pub trait Mapper: std::fmt::Debug + Sync {
     #[requires(desired_size > 0)]
     #[requires(data_size > 0)]
     #[ensures(ret.is_ok() -> debug_arange_map::reserve_range(ret.unwrap().0.as_ptr() as usize, ret.unwrap().1).is_ok())]
+    #[ensures(ret.is_ok() -> ret.as_ref().unwrap().0.as_ptr() != std::ptr::null_mut(),
+              "The mapped range never includes NULL")]
+    #[ensures(ret.is_ok() -> ret.as_ref().unwrap().1 < usize::MAX - ret.as_ref().unwrap().0.as_ptr() as usize,
+              "The mapped range never overflows")]
     fn reserve(
         &self,
         desired_size: usize,
