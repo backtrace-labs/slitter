@@ -389,22 +389,33 @@ impl Press {
         &self,
         dst: &mut [MaybeUninit<LinearRef>],
     ) -> (usize, Option<LinearRef>) {
-        let ret = self.allocate_one_object();
+        let elsize = self.layout.size();
 
-        if ret.is_none() {
-            return (0, ret);
-        }
+        match self.try_allocate(NonZeroUsize::new(dst.len() + 1).expect("Should not overflow")) {
+            Some((base, count)) => {
+                let mut address = base.get();
 
-        let mut count = 0;
-        for uninit in dst.iter_mut() {
-            if let Some(new) = self.allocate_one_object() {
-                unsafe { uninit.as_mut_ptr().write(new) };
-                count += 1;
-            } else {
-                break;
+                // Acquires the next element from `base[0..count]`.
+                let mut get_ref = || {
+                    let ret =
+                        LinearRef::new(unsafe { NonNull::new_unchecked(address as *mut c_void) });
+
+                    address += elsize;
+                    ret
+                };
+
+                let ret = Some(get_ref());
+
+                let mut populated = 0;
+                for uninit in dst.iter_mut().take(count.get() - 1) {
+                    unsafe { uninit.as_mut_ptr().write(get_ref()) };
+                    populated += 1;
+                }
+
+                debug_assert!(populated <= count.get());
+                (populated, ret)
             }
+            None => (0, None),
         }
-
-        (count, ret)
     }
 }
