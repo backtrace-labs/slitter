@@ -58,6 +58,18 @@ use crate::mill::SpanMetadata;
 use crate::mill::MAX_SPAN_SIZE;
 use crate::Class;
 
+/// We batch-allocate at most this many elements at once.  This limit
+/// makes it clear that a 64-bit counter will not wraparound.
+///
+/// In practice, callers ask for one more than the magazine size, at
+/// most, and that's less than this limit.
+const MAX_ALLOCATION_BATCH: usize = 100;
+
+static_assertions::const_assert!(
+    (crate::magazine_impl::MAGAZINE_SIZE as usize) < MAX_ALLOCATION_BATCH
+);
+
+/// We don't guarantee alignment greater than this value.
 pub const MAX_OBJECT_ALIGNMENT: usize = 4096;
 
 static_assertions::const_assert!(MAX_OBJECT_ALIGNMENT <= mill::MAX_SPAN_SIZE);
@@ -145,7 +157,7 @@ impl Press {
     #[requires(debug_arange_map::is_metadata(meta as * mut SpanMetadata as usize,
                                              std::mem::size_of::<SpanMetadata>()).is_ok(),
                "The `meta` reference must come from a metadata range.")]
-    #[ensures(ret.is_some() -> ret.unwrap().1.get() <= _max_count.get(),
+    #[ensures(ret.is_some() -> ret.unwrap().1.get() <= max_count.get(),
               "We never return more than `max_count` allocations.")]
     #[ensures(ret.is_some() -> self.associate_range(ret.unwrap().0.get(), ret.unwrap().1.get()).is_ok(),
               "On success, it must be possible to associate the returned address with `self.class`.")]
@@ -157,13 +169,21 @@ impl Press {
     fn try_allocate_from_span(
         &self,
         meta: &mut SpanMetadata,
-        _max_count: NonZeroUsize,
+        max_count: NonZeroUsize,
     ) -> Option<(NonZeroUsize, NonZeroUsize)> {
-        let allocated_id = meta.bump_ptr.fetch_add(1, Ordering::Relaxed);
+        let desired = max_count.get().clamp(0, MAX_ALLOCATION_BATCH);
+        let limit = meta.bump_limit as usize;
 
-        if allocated_id >= meta.bump_limit as usize {
+        let allocated_id = meta.bump_ptr.fetch_add(desired, Ordering::Relaxed);
+        if allocated_id >= limit {
             return None;
         }
+
+        // This is our actual allocation count: our allocated range
+        // starts at `allocated_id`, and stops at `allocated_id +
+        // desired` (that's how much we acquired), or at `limit`
+        // if we acquired more than the bump limit.
+        let actual = (limit - allocated_id).clamp(0, desired);
 
         // `meta.bump_ptr` is incremented atomically, so
         // we always return fresh addresses.
@@ -172,7 +192,7 @@ impl Press {
         // postconditions, checked in `assert_new_bump_is_safe`.
         Some((
             NonZeroUsize::new(meta.span_begin + allocated_id * self.layout.size())?,
-            NonZeroUsize::new(1)?,
+            NonZeroUsize::new(actual)?,
         ))
     }
 
