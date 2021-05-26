@@ -136,6 +136,22 @@ impl Press {
         Ok(())
     }
 
+    /// Checks if the `count` allocations starting at `begin` are associated with `self.class`.
+    #[cfg(any(
+        all(test, feature = "check_contracts_in_tests"),
+        feature = "check_contracts"
+    ))]
+    fn is_range_associated_and_free(&self, begin: usize, count: usize) -> Result<(), &'static str> {
+        for i in 0..count {
+            let address = NonNull::new((begin + i * self.layout.size()) as *mut c_void)
+                .ok_or("allocated NULL pointer")?;
+            debug_type_map::ptr_is_class(self.class, &address)?;
+            debug_allocation_map::can_be_allocated(self.class, &address)?;
+        }
+
+        Ok(())
+    }
+
     /// Checks that all `count` allocations starting at `begin` are associated with `self.class`.
     #[cfg(any(
         all(test, feature = "check_contracts_in_tests"),
@@ -274,33 +290,32 @@ impl Press {
         Ok(())
     }
 
-    /// Attempts to allocate one object.  Returns Ok(_) if we tried to
-    /// allocate from the current bump region.
+    /// Attempts to allocate up to `max_count` objects.  Returns Ok()
+    /// if we tried to allocate from the current bump region.
+    ///
+    /// On allocation success, returns Ok(Some(base_address, object_count))
     ///
     /// # Errors
     ///
     /// Returns `Err` if we failed to grab a new bump region.
-    #[ensures(ret.is_ok() && ret.as_ref().unwrap().is_some() ->
-              debug_allocation_map::can_be_allocated(self.class, ret.as_ref().unwrap().as_ref().unwrap().get()).is_ok(),
+    #[ensures(ret.is_ok() && ret.unwrap().is_some() ->
+              ret.unwrap().unwrap().1.get() <= max_count.get(),
+              "We never overallocate.")]
+    #[ensures(ret.is_ok() && ret.unwrap().is_some() ->
+              self.is_range_associated_and_free(ret.unwrap().unwrap().0.get(), ret.unwrap().unwrap().1.get()).is_ok(),
               "Successful allocations are fresh, or match the class and avoid double-allocation.")]
-    #[ensures(ret.is_ok() && ret.as_ref().unwrap().is_some() ->
-              debug_type_map::is_class(self.class, ret.as_ref().unwrap().as_ref().unwrap()).is_ok(),
-              "On success, the new allocation has the correct type.")]
-    #[ensures(ret.is_ok() && ret.as_ref().unwrap().is_some() ->
-              check_allocation(self.class, ret.as_ref().unwrap().as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+    #[ensures(ret.is_ok() && ret.unwrap().is_some() ->
+              self.check_allocation_range(ret.unwrap().unwrap().0.get(), ret.unwrap().unwrap().1.get()).is_ok(),
               "Sucessful allocations must have the allocation metadata set correctly.")]
-    fn try_allocate_once(&self) -> Result<Option<LinearRef>, i32> {
+    fn try_allocate_once(
+        &self,
+        max_count: NonZeroUsize,
+    ) -> Result<Option<(NonZeroUsize, NonZeroUsize)>, i32> {
         let meta_ptr: *mut SpanMetadata = self.bump.load(Ordering::Acquire);
 
         if let Some(meta) = unsafe { meta_ptr.as_mut() } {
-            if let Some((address, count)) =
-                self.try_allocate_from_span(meta, NonZeroUsize::new(1).unwrap())
-            {
-                assert_eq!(count.get(), 1);
-                // Address is a `NonZeroUsize`.
-                return Ok(Some(LinearRef::new(unsafe {
-                    NonNull::new_unchecked(address.get() as *mut c_void)
-                })));
+            if let Some(result) = self.try_allocate_from_span(meta, max_count) {
+                return Ok(Some(result));
             }
         }
 
@@ -321,9 +336,14 @@ impl Press {
               "Sucessful allocations must have the allocation metadata set correctly.")]
     pub fn allocate_one_object(&self) -> Option<LinearRef> {
         loop {
-            match self.try_allocate_once() {
+            match self.try_allocate_once(NonZeroUsize::new(1).unwrap()) {
                 Err(_) => return None, // TODO: log
-                Ok(Some(ret)) => return Some(ret),
+                Ok(Some((address, _count))) => {
+                    // Address is a `NonZeroUsize`.
+                    return Some(LinearRef::new(unsafe {
+                        NonNull::new_unchecked(address.get() as *mut c_void)
+                    }));
+                }
                 _ => continue,
             }
         }
