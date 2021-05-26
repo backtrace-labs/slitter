@@ -28,6 +28,7 @@ use disabled_contracts::*;
 use std::alloc::Layout;
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
+use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::AtomicUsize;
@@ -110,37 +111,69 @@ impl Press {
         }
     }
 
-    /// Attempts to allocate one object by bumping the metadata
-    /// pointer.
+    /// Associates the `count` allocations starting at `begin` with `self.class`.
+    #[cfg(any(
+        all(test, feature = "check_contracts_in_tests"),
+        feature = "check_contracts"
+    ))]
+    fn associate_range(&self, begin: usize, count: usize) -> Result<(), &'static str> {
+        for i in 0..count {
+            debug_type_map::associate_class(self.class, begin + i * self.layout.size())?;
+        }
+
+        Ok(())
+    }
+
+    /// Checks that all `count` allocations starting at `begin` are associated with `self.class`.
+    #[cfg(any(
+        all(test, feature = "check_contracts_in_tests"),
+        feature = "check_contracts"
+    ))]
+    fn check_allocation_range(&self, begin: usize, count: usize) -> Result<(), &'static str> {
+        for i in 0..count {
+            check_allocation(self.class, begin + i * self.layout.size())?;
+        }
+
+        Ok(())
+    }
+
+    /// Attempts to allocate up to `max_count` consecutive object by
+    /// bumping the metadata pointer.
+    ///
+    /// Returns the address of the first object and the number of
+    /// allocations on success.
     #[requires(debug_arange_map::is_metadata(meta as * mut SpanMetadata as usize,
                                              std::mem::size_of::<SpanMetadata>()).is_ok(),
                "The `meta` reference must come from a metadata range.")]
-    #[ensures(ret.is_some() ->
-              debug_type_map::associate_class(self.class,
-                                              ret.as_ref().unwrap()).is_ok(),
+    #[ensures(ret.is_some() -> ret.unwrap().1.get() <= _max_count.get(),
+              "We never return more than `max_count` allocations.")]
+    #[ensures(ret.is_some() -> self.associate_range(ret.unwrap().0.get(), ret.unwrap().1.get()).is_ok(),
               "On success, it must be possible to associate the returned address with `self.class`.")]
     #[ensures(ret.is_some() ->
-              debug_arange_map::is_data(ret.as_ref().unwrap().get().as_ptr() as usize,
-                                        self.layout.size()).is_ok(),
+              debug_arange_map::is_data(ret.unwrap().0.get(), self.layout.size() * ret.unwrap().1.get()).is_ok(),
               "On success, the returned data must come from a data range.")]
-    #[ensures(ret.is_some() ->
-              check_allocation(self.class,
-                               ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
-              "On success, the allocation must have the class metadata set up.")]
-    fn try_allocate_from_span(&self, meta: &mut SpanMetadata) -> Option<LinearRef> {
+    #[ensures(ret.is_some() -> self.check_allocation_range(ret.unwrap().0.get(), ret.unwrap().1.get()).is_ok(),
+              "On success, the allocations must all have the class metadata set up.")]
+    fn try_allocate_from_span(
+        &self,
+        meta: &mut SpanMetadata,
+        _max_count: NonZeroUsize,
+    ) -> Option<(NonZeroUsize, NonZeroUsize)> {
         let allocated_id = meta.bump_ptr.fetch_add(1, Ordering::Relaxed);
 
         if allocated_id >= meta.bump_limit as usize {
             return None;
         }
 
-        let address = meta.span_begin + allocated_id * self.layout.size();
         // `meta.bump_ptr` is incremented atomically, so
-        // `LinearRef::new` always receives a unique address.
+        // we always return fresh addresses.
         //
         // XXX: This expression has to satisfy the `ensures`
         // postconditions, checked in `assert_new_bump_is_safe`.
-        Some(LinearRef::new(NonNull::new(address as *mut c_void)?))
+        Some((
+            NonZeroUsize::new(meta.span_begin + allocated_id * self.layout.size())?,
+            NonZeroUsize::new(1)?,
+        ))
     }
 
     /// Asserts that every allocation in `bump` is valid for the
@@ -240,8 +273,14 @@ impl Press {
         let meta_ptr: *mut SpanMetadata = self.bump.load(Ordering::Acquire);
 
         if let Some(meta) = unsafe { meta_ptr.as_mut() } {
-            if let Some(ret) = self.try_allocate_from_span(meta) {
-                return Ok(Some(ret));
+            if let Some((address, count)) =
+                self.try_allocate_from_span(meta, NonZeroUsize::new(1).unwrap())
+            {
+                assert_eq!(count.get(), 1);
+                // Address is a `NonZeroUsize`.
+                return Ok(Some(LinearRef::new(unsafe {
+                    NonNull::new_unchecked(address.get() as *mut c_void)
+                })));
             }
         }
 
