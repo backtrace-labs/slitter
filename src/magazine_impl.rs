@@ -25,14 +25,17 @@ use std::ptr::NonNull;
 use crate::linear_ref::LinearRef;
 
 #[cfg(not(feature = "test_only_small_constants"))]
-const MAGAZINE_SIZE: u32 = 30;
+pub const MAGAZINE_SIZE: u32 = 30;
 
 #[cfg(feature = "test_only_small_constants")]
-const MAGAZINE_SIZE: u32 = 6;
+pub const MAGAZINE_SIZE: u32 = 6;
 
 /// The `MagazineStorage` is the heap-allocated storage for a
 /// magazine.
-#[repr(C)] // We access this struct from C.
+///
+/// The same struct is available in C as `struct magazine_storage`, in
+/// `mag.h`.
+#[repr(C)]
 pub struct MagazineStorage {
     /// The `allocations` array is populated from the bottom up; the
     /// first `num_allocated` indices have values, and the remainder
@@ -48,6 +51,9 @@ pub struct MagazineStorage {
 
 /// The `MagazineImpl` is the actual implementation for the storage.
 /// This split lets us cache information inline.
+///
+/// The same struct is available in C as `struct magazine`, in
+/// `mag.h`.
 #[repr(C)]
 pub struct MagazineImpl {
     /// The `allocations` array is populated from the bottom up; the
