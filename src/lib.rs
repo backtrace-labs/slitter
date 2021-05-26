@@ -7,6 +7,7 @@ mod magazine_impl;
 mod map;
 mod mill;
 mod press;
+mod rack;
 
 #[cfg(any(
     all(test, feature = "check_contracts_in_tests"),

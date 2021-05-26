@@ -53,7 +53,7 @@ pub(crate) struct ClassInfo {
     pub layout: Layout,
 
     // The Class will allocate and release magazines via this Rack.
-    pub rack: &'static crate::magazine::Rack,
+    pub rack: &'static crate::rack::Rack,
 
     // Fully populated magazines go in in `full_mags`.
     pub full_mags: MagazineStack,
@@ -131,7 +131,7 @@ impl Class {
         let info = Box::leak(Box::new(ClassInfo {
             name: config.name,
             layout: config.layout,
-            rack: crate::magazine::get_default_rack(),
+            rack: crate::rack::get_default_rack(),
             full_mags: MagazineStack::new(),
             partial_mags: MagazineStack::new(),
             press: Press::new(id, config.layout)?,

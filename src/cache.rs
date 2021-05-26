@@ -110,7 +110,7 @@ impl Drop for Cache {
             } else {
                 // This must be the padding slot at index 0.
                 assert!(self.per_class.is_empty());
-                crate::magazine::get_default_rack().release_empty_magazine(mag);
+                crate::rack::get_default_rack().release_empty_magazine(mag);
             }
         }
     }
@@ -175,7 +175,7 @@ impl Cache {
             let mag = if let Some(i) = info {
                 i.allocate_magazine()
             } else {
-                crate::magazine::get_default_rack().allocate_empty_magazine()
+                crate::rack::get_default_rack().allocate_empty_magazine()
             };
 
             let slot = ClassCache { mag, info };

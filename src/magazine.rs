@@ -50,18 +50,6 @@ pub struct MagazineStack {
     inner: Mutex<Option<Box<MagazineImpl>>>,
 }
 
-/// A `Rack` allocates and recycles empty magazines.
-pub struct Rack {
-    // No state yet.
-}
-
-/// Returns a reference to the global default magazine rack.
-pub fn get_default_rack() -> &'static Rack {
-    lazy_static::lazy_static! { static ref RACK: Rack = Rack{}; };
-
-    &RACK
-}
-
 impl Magazine {
     /// Checks that current object's state is valid.
     ///
@@ -156,20 +144,6 @@ impl MagazineStack {
         } else {
             None
         }
-    }
-}
-
-impl Rack {
-    #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
-    pub fn allocate_empty_magazine(&self) -> Magazine {
-        Magazine(Box::new(Default::default()))
-    }
-
-    #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]
-    pub fn release_empty_magazine(&self, mag: Magazine) {
-        // We can only release empty magazines.
-        assert_eq!(mag.0.num_allocated, 0);
-        // And now drop it.
     }
 }
 
@@ -291,16 +265,8 @@ impl crate::class::ClassInfo {
 }
 
 #[test]
-fn smoke_test_rack() {
-    let rack = get_default_rack();
-    let mag = rack.allocate_empty_magazine();
-
-    rack.release_empty_magazine(mag);
-}
-
-#[test]
 fn magazine_stack_smoke_test() {
-    let rack = get_default_rack();
+    let rack = crate::rack::get_default_rack();
     let stack = MagazineStack::new();
 
     stack.push(rack.allocate_empty_magazine());

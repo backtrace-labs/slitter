@@ -188,7 +188,7 @@ impl Drop for MagazineImpl {
 
 #[test]
 fn smoke_test_magazine() {
-    let rack = crate::magazine::get_default_rack();
+    let rack = crate::rack::get_default_rack();
     let mut mag = rack.allocate_empty_magazine().0;
 
     // Getting an empty magazine should return None
@@ -228,7 +228,7 @@ fn smoke_test_magazine() {
 
 #[test]
 fn magazine_fill_up() {
-    let rack = crate::magazine::get_default_rack();
+    let rack = crate::rack::get_default_rack();
     let mut mag = rack.allocate_empty_magazine().0;
 
     // Fill up the magazine.
@@ -269,7 +269,7 @@ fn magazine_fill_up() {
 
 #[test]
 fn magazine_populate() {
-    let rack = crate::magazine::get_default_rack();
+    let rack = crate::rack::get_default_rack();
     let mut mag = rack.allocate_empty_magazine().0;
 
     // Fill up the magazine.
