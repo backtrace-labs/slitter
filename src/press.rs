@@ -325,6 +325,26 @@ impl Press {
         self.try_replace_span(meta_ptr).map(|_| None)
     }
 
+    /// Tries to allocate up to `max_count` objects.  Only fails on OOM.
+    #[ensures(ret.is_some() ->
+              ret.unwrap().1.get() <= max_count.get(),
+              "We never overallocate.")]
+    #[ensures(ret.is_some() ->
+              self.is_range_associated_and_free(ret.unwrap().0.get(), ret.unwrap().1.get()).is_ok(),
+              "Successful allocations are fresh, or match the class and avoid double-allocation.")]
+    #[ensures(ret.is_some() ->
+              self.check_allocation_range(ret.unwrap().0.get(), ret.unwrap().1.get()).is_ok(),
+              "Sucessful allocations must have the allocation metadata set correctly.")]
+    fn try_allocate(&self, max_count: NonZeroUsize) -> Option<(NonZeroUsize, NonZeroUsize)> {
+        loop {
+            match self.try_allocate_once(max_count) {
+                Err(_) => return None, // TODO: log
+                Ok(Some(result)) => return Some(result),
+                _ => continue,
+            }
+        }
+    }
+
     #[ensures(ret.is_some() ->
               debug_allocation_map::can_be_allocated(self.class, ret.as_ref().unwrap().get()).is_ok(),
               "Successful allocations are fresh, or match the class and avoid double-allocation.")]
@@ -335,18 +355,12 @@ impl Press {
               check_allocation(self.class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
               "Sucessful allocations must have the allocation metadata set correctly.")]
     pub fn allocate_one_object(&self) -> Option<LinearRef> {
-        loop {
-            match self.try_allocate_once(NonZeroUsize::new(1).unwrap()) {
-                Err(_) => return None, // TODO: log
-                Ok(Some((address, _count))) => {
-                    // Address is a `NonZeroUsize`.
-                    return Some(LinearRef::new(unsafe {
-                        NonNull::new_unchecked(address.get() as *mut c_void)
-                    }));
-                }
-                _ => continue,
-            }
-        }
+        let (address, _count) = self.try_allocate(NonZeroUsize::new(1).unwrap())?;
+
+        debug_assert_eq!(_count.get(), 1);
+        Some(LinearRef::new(unsafe {
+            NonNull::new_unchecked(address.get() as *mut c_void)
+        }))
     }
 
     /// Attempts to allocate multiple objects: first the second return
