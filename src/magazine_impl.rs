@@ -34,10 +34,12 @@ const MAGAZINE_SIZE: u32 = 6;
 /// magazine.
 #[repr(C)] // We access this struct from C.
 pub struct MagazineStorage {
-    /// The `allocations` array is populated from the bottom up;
-    /// the first `num_allocated` indices have NonNull values,
-    /// and the remainder are undefined.
-    num_allocated: u32,
+    /// The `allocations` array is populated from the bottom up; the
+    /// first `num_allocated` indices have values, and the remainder
+    /// are uninitialised.
+    ///
+    /// This field may not be accurate when wrapped in a `MagazineImpl`.
+    num_allocated_slow: u32,
     allocations: [MaybeUninit<LinearRef>; MAGAZINE_SIZE as usize],
 
     /// Single linked list linkage.
@@ -46,8 +48,12 @@ pub struct MagazineStorage {
 
 /// The `MagazineImpl` is the actual implementation for the storage.
 /// This split lets us cache information inline.
-#[repr(transparent)]
+#[repr(C)]
 pub struct MagazineImpl {
+    /// The `allocations` array is populated from the bottom up; the
+    /// first `num_allocated` indices have values, and the remainder
+    /// are uninitialised.
+    num_allocated: u32,
     inner: &'static mut MagazineStorage,
 }
 
@@ -61,7 +67,10 @@ impl MagazineImpl {
         ))]
         assert!(inner.link.is_none());
 
-        Self { inner: inner }
+        Self {
+            num_allocated: inner.num_allocated_slow,
+            inner,
+        }
     }
 
     // Disabled postcondition: lifetimes are too hard for contracts.
@@ -73,6 +82,7 @@ impl MagazineImpl {
         ))]
         assert!(self.inner.link.is_none());
 
+        self.inner.num_allocated_slow = self.num_allocated;
         self.inner
     }
 
@@ -82,7 +92,7 @@ impl MagazineImpl {
         feature = "check_contracts"
     ))]
     pub fn len(&self) -> usize {
-        self.inner.num_allocated as usize
+        self.num_allocated as usize
     }
 
     /// Returns a reference to the element at `index`.
@@ -114,7 +124,7 @@ impl MagazineImpl {
         self.inner
             .allocations
             .iter()
-            .take(self.inner.num_allocated as usize)
+            .take(self.num_allocated as usize)
             .all(|entry| !entry.as_ptr().is_null())
     }
 
@@ -124,11 +134,11 @@ impl MagazineImpl {
         feature = "check_contracts"
     ))]
     fn peek(&self) -> *mut c_void {
-        if self.inner.num_allocated == 0 {
+        if self.num_allocated == 0 {
             std::ptr::null::<c_void>() as *mut _
         } else {
             unsafe {
-                self.inner.allocations[self.inner.num_allocated as usize - 1]
+                self.inner.allocations[self.num_allocated as usize - 1]
                     .as_ptr()
                     .as_ref()
             }
@@ -142,23 +152,23 @@ impl MagazineImpl {
     #[invariant(self.check_rep(), "Representation makes sense.")]
     #[ensures(old(self.is_empty()) == ret.is_none(),
               "We only fail to pop from empty magazines.")]
-    #[ensures(ret.is_none() -> self.inner.num_allocated == old(self.inner.num_allocated),
+    #[ensures(ret.is_none() -> self.num_allocated == old(self.num_allocated),
               "We don't change the stack size on failure.")]
-    #[ensures(ret.is_some() -> self.inner.num_allocated == old(self.inner.num_allocated) - 1,
+    #[ensures(ret.is_some() -> self.num_allocated == old(self.num_allocated) - 1,
               "Must remove one element on success.")]
     #[ensures(ret.is_some() -> ret.as_ref().unwrap().get().as_ptr() == old(self.peek()),
               "Must return the top of stack on success.")]
     #[inline(always)]
     pub fn get(&mut self) -> Option<LinearRef> {
-        if self.inner.num_allocated == 0 {
+        if self.num_allocated == 0 {
             return None;
         }
 
-        self.inner.num_allocated -= 1;
+        self.num_allocated -= 1;
         let mut old = MaybeUninit::uninit();
         std::mem::swap(
             &mut old,
-            &mut self.inner.allocations[self.inner.num_allocated as usize],
+            &mut self.inner.allocations[self.num_allocated as usize],
         );
         Some(unsafe { old.assume_init() })
     }
@@ -167,9 +177,9 @@ impl MagazineImpl {
     ///
     /// Returns that unused block on failure.
     #[invariant(self.check_rep())]
-    #[ensures(ret.is_none() -> self.inner.num_allocated == old(self.inner.num_allocated) + 1,
+    #[ensures(ret.is_none() -> self.num_allocated == old(self.num_allocated) + 1,
               "We add one element on success.")]
-    #[ensures(ret.is_some() -> self.inner.num_allocated == old(self.inner.num_allocated),
+    #[ensures(ret.is_some() -> self.num_allocated == old(self.num_allocated),
               "We don't change the stack on failure.")]
     #[ensures(ret.is_some() -> old(freed.get().as_ptr()) == ret.as_ref().unwrap().get().as_ptr(),
               "On failure, we return `freed`.")]
@@ -179,12 +189,12 @@ impl MagazineImpl {
               "We only fail to push to full magazines.")]
     #[inline(always)]
     pub fn put(&mut self, freed: LinearRef) -> Option<LinearRef> {
-        let index = self.inner.num_allocated;
+        let index = self.num_allocated;
         if index >= MAGAZINE_SIZE {
             return Some(freed);
         }
 
-        self.inner.num_allocated += 1;
+        self.num_allocated += 1;
         unsafe {
             self.inner.allocations[index as usize]
                 .as_mut_ptr()
@@ -195,10 +205,10 @@ impl MagazineImpl {
 
     /// Fills `self` with allocations returned by `allocator`
     #[invariant(self.check_rep())]
-    #[ensures(self.inner.num_allocated >= old(self.inner.num_allocated),
+    #[ensures(self.num_allocated >= old(self.num_allocated),
               "We should never lose allocations.")]
     pub fn populate(&mut self, mut allocator: impl FnMut() -> Option<LinearRef>) {
-        let mut count = self.inner.num_allocated as usize;
+        let mut count = self.num_allocated as usize;
 
         while count < MAGAZINE_SIZE as usize {
             match allocator() {
@@ -209,19 +219,19 @@ impl MagazineImpl {
             count += 1;
         }
 
-        self.inner.num_allocated = count as u32;
+        self.num_allocated = count as u32;
     }
 
     #[invariant(self.check_rep())]
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.inner.num_allocated == MAGAZINE_SIZE
+        self.num_allocated == MAGAZINE_SIZE
     }
 
     #[invariant(self.check_rep())]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.num_allocated == 0
+        self.num_allocated == 0
     }
 }
 
@@ -237,7 +247,7 @@ impl Default for MagazineStorage {
         }
 
         Self {
-            num_allocated: 0,
+            num_allocated_slow: 0,
             // Safe to leave this as garbage: we never read past
             // `num_allocated`.
             allocations: unsafe { MaybeUninit::uninit().assume_init() },
@@ -248,7 +258,7 @@ impl Default for MagazineStorage {
 
 /// We should only drop empty magazines.
 impl Drop for MagazineStorage {
-    #[requires(self.num_allocated == 0,
+    #[requires(self.num_allocated_slow == 0,
                "Only empty magazines can be dropped.")]
     fn drop(&mut self) {}
 }
@@ -300,9 +310,9 @@ fn magazine_fill_up() {
 
     // Fill up the magazine.
     for i in 1..=MAGAZINE_SIZE {
-        assert_eq!(mag.inner.num_allocated, i - 1);
+        assert_eq!(mag.num_allocated, i - 1);
         assert_eq!(mag.put(LinearRef::from_address(i as usize)), None);
-        assert_eq!(mag.inner.num_allocated, i);
+        assert_eq!(mag.num_allocated, i);
     }
 
     // This insert should fail
@@ -312,24 +322,24 @@ fn magazine_fill_up() {
     assert_eq!(failed_insert.get().as_ptr() as usize, usize::MAX);
     std::mem::forget(failed_insert);
 
-    assert_eq!(mag.inner.num_allocated, MAGAZINE_SIZE);
+    assert_eq!(mag.num_allocated, MAGAZINE_SIZE);
 
     // We should pop in LIFO order.
     for i in (1..=MAGAZINE_SIZE).rev() {
-        assert_eq!(mag.inner.num_allocated, i);
+        assert_eq!(mag.num_allocated, i);
         let popped = mag.get().expect("has value");
         assert_eq!(popped.get().as_ptr() as usize, i as usize);
         std::mem::forget(popped);
 
-        assert_eq!(mag.inner.num_allocated, i - 1);
+        assert_eq!(mag.num_allocated, i - 1);
     }
 
     // And now the magazine should be empty.
-    assert_eq!(mag.inner.num_allocated, 0);
+    assert_eq!(mag.num_allocated, 0);
     // So all subsequent `get()` calls will return None.
     assert_eq!(mag.get(), None);
     assert_eq!(mag.get(), None);
-    assert_eq!(mag.inner.num_allocated, 0);
+    assert_eq!(mag.num_allocated, 0);
 
     rack.release_empty_magazine(crate::magazine::Magazine(mag));
 }
@@ -346,20 +356,20 @@ fn magazine_populate() {
         Some(LinearRef::from_address(count))
     });
 
-    assert_eq!(mag.inner.num_allocated, MAGAZINE_SIZE);
+    assert_eq!(mag.num_allocated, MAGAZINE_SIZE);
 
     // We should pop in LIFO order.
     for i in (1..=MAGAZINE_SIZE).rev() {
-        assert_eq!(mag.inner.num_allocated, i);
+        assert_eq!(mag.num_allocated, i);
         let popped = mag.get().expect("has value");
         assert_eq!(popped.get().as_ptr() as usize, i as usize);
         std::mem::forget(popped);
 
-        assert_eq!(mag.inner.num_allocated, i - 1);
+        assert_eq!(mag.num_allocated, i - 1);
     }
 
     // And now the magazine should be empty.
-    assert_eq!(mag.inner.num_allocated, 0);
+    assert_eq!(mag.num_allocated, 0);
 
     rack.release_empty_magazine(crate::magazine::Magazine(mag));
 }
