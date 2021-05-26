@@ -16,10 +16,11 @@ use std::sync::Mutex;
 
 use crate::magazine::Magazine;
 use crate::magazine_impl::MagazineImpl;
+use crate::magazine_impl::MagazineStorage;
 
 /// A `MagazineStack` is a single-linked intrusive stack of magazines.
 pub struct MagazineStack {
-    inner: Mutex<Option<NonNull<MagazineImpl>>>,
+    inner: Mutex<Option<NonNull<MagazineStorage>>>,
 }
 
 impl MagazineStack {
@@ -32,11 +33,12 @@ impl MagazineStack {
     #[requires(mag.check_rep(None).is_ok(),
                "Magazine must make sense.")]
     pub fn push(&self, mag: Magazine) {
-        assert!(mag.0.link.is_none());
+        let storage = mag.0.storage();
+
         let mut stack = self.inner.lock().unwrap();
 
-        mag.0.link = stack.take();
-        *stack = Some(mag.0.into())
+        storage.link = stack.take();
+        *stack = Some(storage.into())
     }
 
     #[ensures(ret.is_some() ->
@@ -49,7 +51,7 @@ impl MagazineStack {
             let mag: &'static mut _ = unsafe { &mut *mag_ptr.as_ptr() };
             std::mem::swap(&mut mag.link, &mut *stack);
             assert!(mag.link.is_none());
-            Some(Magazine(mag))
+            Some(Magazine(MagazineImpl::new(mag)))
         } else {
             None
         }

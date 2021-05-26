@@ -41,7 +41,7 @@ use crate::magazine_impl::MagazineImpl;
 /// lets us impose a tighter contract on the interface used in the
 /// allocator, while keeping the internal implementation testable.
 #[repr(transparent)]
-pub struct Magazine(pub(crate) &'static mut MagazineImpl);
+pub struct Magazine(pub(crate) MagazineImpl);
 
 impl Magazine {
     /// Checks that current object's state is valid.
@@ -56,17 +56,10 @@ impl Magazine {
             return Err("MagazineImpl fails check_rep");
         }
 
-        if self.0.link.is_some() {
-            // Once wrapped in a public-facing `Magazine`, the link field
-            // is always `None`: we only use it for an intrusive list in
-            // `MagazineStack`.
-            return Err("Magazine has linkage.");
-        }
-
         // If we have an allocation class, the types must match.
         if let Some(class) = maybe_class {
-            for i in 0..self.0.num_allocated {
-                let alloc = unsafe { &*self.0.allocations[i as usize].as_ptr() };
+            for i in 0..self.0.len() {
+                let alloc = self.0.nth(i);
 
                 debug_allocation_map::can_be_allocated(class, alloc.get())?;
                 debug_type_map::is_class(class, alloc)?;
@@ -213,8 +206,6 @@ impl crate::class::ClassInfo {
                "Magazine must match `self`.")]
     #[inline(never)]
     pub(crate) fn release_magazine(&self, mag: Magazine) {
-        assert!(mag.0.link.is_none());
-
         if mag.is_empty() {
             self.rack.release_empty_magazine(mag);
         } else if mag.is_full() {
