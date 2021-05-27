@@ -11,13 +11,13 @@
  * Matches `MagazineStorage` on the Rust side.
  */
 struct magazine_storage {
-	uint32_t num_allocated_slow;
 	void *allocations[SLITTER__MAGAZINE_SIZE];
         /*
          * The `link` pointer is only used by the C side.
          * It's always NULL (None) on the Rust side.
          */
 	struct magazine_storage *volatile link;
+	uint32_t num_allocated_slow;
 };
 
 /**

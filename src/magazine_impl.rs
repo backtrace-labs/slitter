@@ -37,16 +37,17 @@ pub const MAGAZINE_SIZE: u32 = 6;
 /// `mag.h`.
 #[repr(C)]
 pub struct MagazineStorage {
+    allocations: [MaybeUninit<LinearRef>; MAGAZINE_SIZE as usize],
+
+    /// Single linked list linkage.
+    pub(crate) link: Option<NonNull<MagazineStorage>>,
+
     /// The `allocations` array is populated from the bottom up; the
     /// first `num_allocated_slow` indices have values, and the
     /// remainder are uninitialised.
     ///
     /// This field may not be accurate when wrapped in a `MagazineImpl`.
     num_allocated_slow: u32,
-    allocations: [MaybeUninit<LinearRef>; MAGAZINE_SIZE as usize],
-
-    /// Single linked list linkage.
-    pub(crate) link: Option<NonNull<MagazineStorage>>,
 }
 
 /// The `MagazineImpl` is the actual implementation for the storage.
@@ -421,11 +422,11 @@ impl Default for MagazineStorage {
         }
 
         Self {
-            num_allocated_slow: 0,
             // Safe to leave this as garbage: we never read past
             // `num_allocated_slow`.
             allocations: unsafe { MaybeUninit::uninit().assume_init() },
             link: None,
+            num_allocated_slow: 0,
         }
     }
 }
