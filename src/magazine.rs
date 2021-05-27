@@ -67,11 +67,11 @@ impl<const PUSH_MAG: bool> Magazine<PUSH_MAG> {
         // If we have an allocation class, the types must match.
         if let Some(class) = maybe_class {
             for i in 0..self.0.len() {
-                let alloc = self.0.nth(i);
-
-                debug_allocation_map::can_be_allocated(class, alloc.get())?;
-                debug_type_map::is_class(class, alloc)?;
-                press::check_allocation(class, alloc.get().as_ptr() as usize)?;
+                if let Some(alloc) = self.0.nth(i) {
+                    debug_allocation_map::can_be_allocated(class, alloc.get())?;
+                    debug_type_map::is_class(class, alloc)?;
+                    press::check_allocation(class, alloc.get().as_ptr() as usize)?;
+                }
             }
         }
 

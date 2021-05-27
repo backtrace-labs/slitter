@@ -72,9 +72,11 @@ impl Rack {
     #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
     #[inline(always)]
     pub fn allocate_empty_magazine<const PUSH_MAG: bool>(&self) -> Magazine<PUSH_MAG> {
-        self.freelist
-            .pop()
-            .unwrap_or_else(|| Magazine(MagazineImpl::new(Box::leak(Box::new(Default::default())))))
+        self.freelist.pop().unwrap_or_else(|| {
+            Magazine(MagazineImpl::new(Some(Box::leak(Box::new(
+                Default::default(),
+            )))))
+        })
     }
 
     #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]

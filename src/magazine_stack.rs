@@ -55,7 +55,9 @@ impl MagazineStack {
                "Magazine must make sense.")]
     #[inline(always)]
     pub fn push<const PUSH_MAG: bool>(&self, mag: Magazine<PUSH_MAG>) {
-        unsafe { slitter__stack_push(&self, mag.0.storage().into()) };
+        if let Some(storage) = mag.0.storage() {
+            unsafe { slitter__stack_push(&self, storage.into()) }
+        }
     }
 
     #[ensures(ret.is_some() ->
@@ -72,7 +74,7 @@ impl MagazineStack {
             // If `stack_pop` returns true, `dst` must contain a valid owning pointer
             // to a `MagazineStorage`.
             let storage = unsafe { &mut *dst.assume_init().as_ptr() };
-            Some(Magazine(MagazineImpl::new(storage)))
+            Some(Magazine(MagazineImpl::new(Some(storage))))
         } else {
             None
         }
@@ -92,7 +94,7 @@ impl MagazineStack {
             // If `stack_pop` returns true, `dst` must contain a valid owning pointer
             // to a `MagazineStorage`.
             let storage = unsafe { &mut *dst.assume_init().as_ptr() };
-            Some(Magazine(MagazineImpl::new(storage)))
+            Some(Magazine(MagazineImpl::new(Some(storage))))
         } else {
             None
         }
