@@ -586,6 +586,7 @@ impl Mill {
             fn slitter__guard_page_size() -> usize;
             fn slitter__metadata_page_size() -> usize;
             fn slitter__span_alignment() -> usize;
+            fn slitter__span_metadata_size() -> usize;
         }
 
         unsafe {
@@ -593,6 +594,10 @@ impl Mill {
             assert_eq!(GUARD_PAGE_SIZE, slitter__guard_page_size());
             assert_eq!(METADATA_PAGE_SIZE, slitter__metadata_page_size());
             assert_eq!(SPAN_ALIGNMENT, slitter__span_alignment());
+            assert_eq!(
+                std::mem::size_of::<SpanMetadata>(),
+                slitter__span_metadata_size()
+            );
         }
 
         Self {

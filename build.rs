@@ -5,7 +5,7 @@ fn main() {
     #[cfg(feature = "test_only_small_constants")]
     build.define("SLITTER__SMALL_CONSTANTS", "1");
 
-    for file in ["cache", "constants", "mag", "map", "stack"].iter() {
+    for file in ["cache", "constants", "mag", "map", "span_metadata", "stack"].iter() {
         println!("cargo:rerun-if-changed=c/{}.c", file);
         println!("cargo:rerun-if-changed=c/{}.h", file);
 
