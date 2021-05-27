@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -25,8 +26,8 @@ struct magazine_storage {
 /**
  * Matches `MagazineImpl` on the Rust side.
  *
- * `top_of_stack` goes from MAGAZINE_SIZE to 0 when popping,
- * and from -MAGAZINE_SIZE to 0 when pushing.  In both cases,
+ * `top_of_stack` goes from SLITTER__MAGAZINE_SIZE to 0 when popping,
+ * and from -SLITTER__MAGAZINE_SIZE to 0 when pushing.  In both cases,
  * `storage->allocations` is populated with cached objects
  * at low indices, and empty / garbage at high ones.
  */
@@ -36,7 +37,59 @@ struct magazine {
 };
 
 /**
- * Returns the value of the `MAGAZINE_SIZE` constant on the C side.
+ * Returns whether the magazine is exhausted (empty for push
+ * magazines, full for pop ones).
+ */
+inline bool
+slitter__magazine_is_exhausted(const struct magazine *restrict mag)
+{
+
+	return mag->top_of_stack == 0;
+}
+
+/**
+ * Consumes one cached allocation from a non-exhausted "Pop" magazine.
+ */
+inline void *
+slitter__magazine_get_non_empty(struct magazine *restrict mag)
+{
+	void *ret;
+
+	ret = mag->storage->allocations[--mag->top_of_stack];
+	if (ret == NULL)
+		__builtin_unreachable();
+
+	return ret;
+}
+
+/**
+ * Pushes one cached allocation to a non-exhausted "Push" magazine.
+ */
+inline void
+slitter__magazine_put_non_full(struct magazine *restrict mag, void *alloc)
+{
+
+	mag->storage->allocations
+	    [SLITTER__MAGAZINE_SIZE + mag->top_of_stack++] = alloc;
+	return;
+}
+
+/**
+ * Attempts to consume one cached allocation from a "Pop" magazine.
+ *
+ * Returns the cached allocation on success, NULL on failure.
+ */
+void *slitter__magazine_get(struct magazine *restrict mag);
+
+/**
+ * Attempts to push one allocation to a "Push" magazine.
+ *
+ * Returns NULL on success, `alloc` on failure.
+ */
+void *slitter__magazine_put(struct magazine *restrict mag, void *alloc);
+
+/**
+ * Returns the value of the `SLITTER__MAGAZINE_SIZE` constant on the C side.
  *
  * The Rust code uses this function to confirm that the constant has
  * the same value on both sides.

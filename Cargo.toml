@@ -5,7 +5,8 @@ authors = ["Paul Khuong <pkhuong@backtrace.io>"]
 edition = "2018"
 
 [features]
-default = ["check_contracts_in_tests"]
+default = ["check_contracts_in_tests", "c_fast_path"]
+c_fast_path = []  # Use C, and not Rust, for the fast path.
 check_contracts_in_tests = []  # Enable contract checking for cfg(test).
 check_contracts = ["contracts"]  # Enable contract checking.
 test_only_small_constants = []  # Shrink constants to cover more conditions.
@@ -30,5 +31,5 @@ proptest = "1"  # Run with `PROPTEST_FORK=true cargo test`, otherwise
 [package.metadata.x]  # `cargo install cargo-x`, then `cargo x test`, etc.
 test = "PROPTEST_FORK=true cargo test"
 test_opt = "PROPTEST_FORK=true cargo test --release"
-test_release = "PROPTEST_FORK=true cargo test --release --no-default-features"
+test_release = "PROPTEST_FORK=true cargo test --release --no-default-features --features='c_fast_path'"
 test_small_constants = "PROPTEST_FORK=true cargo test --features='test_only_small_constants'"

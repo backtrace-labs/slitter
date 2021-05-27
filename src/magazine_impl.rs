@@ -259,6 +259,22 @@ impl MagazineImpl<true> {
               "We only fail to push to full magazines.")]
     #[inline(always)]
     pub fn put(&mut self, freed: LinearRef) -> Option<LinearRef> {
+        #[cfg(features = "c_fast_path")]
+        const C_FAST_PATH: bool = true;
+        #[cfg(not(features = "c_fast_path"))]
+        const C_FAST_PATH: bool = false;
+
+        if C_FAST_PATH {
+            extern "C" {
+                fn slitter__magazine_put(
+                    mag: &mut MagazineImpl<true>,
+                    freed: LinearRef,
+                ) -> Option<LinearRef>;
+            }
+
+            return unsafe { slitter__magazine_put(self, freed) };
+        }
+
         let index = self.top_of_stack;
         if index == 0 {
             return Some(freed);
@@ -320,6 +336,19 @@ impl MagazineImpl<false> {
               "Must return the top of stack on success.")]
     #[inline(always)]
     pub fn get(&mut self) -> Option<LinearRef> {
+        #[cfg(features = "c_fast_path")]
+        const C_FAST_PATH: bool = true;
+        #[cfg(not(features = "c_fast_path"))]
+        const C_FAST_PATH: bool = false;
+
+        if C_FAST_PATH {
+            extern "C" {
+                fn slitter__magazine_get(mag: &mut MagazineImpl<false>) -> Option<LinearRef>;
+            }
+
+            return unsafe { slitter__magazine_get(self) };
+        }
+
         if self.top_of_stack == 0 {
             return None;
         }
