@@ -33,7 +33,8 @@ use crate::press;
 
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
-use crate::magazine::Magazine;
+use crate::magazine::PopMagazine;
+use crate::magazine::PushMagazine;
 use crate::Class;
 
 /// For each allocation class, we cache up to one magazine's worth of
@@ -48,9 +49,9 @@ use crate::Class;
 /// advantage of pre-zeroed out allocations).
 struct ClassCache {
     /// The cache allocates from this magazine.
-    allocation_mag: Magazine,
+    allocation_mag: PopMagazine,
     /// The cache releases into this magazine.
-    release_mag: Magazine,
+    release_mag: PushMagazine,
 
     /// The `info` field is only `None` for the dummy entry we keep
     /// around for the invalid "0" class id.

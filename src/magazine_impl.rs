@@ -54,8 +54,11 @@ pub struct MagazineStorage {
 ///
 /// The same struct is available in C as `struct magazine`, in
 /// `mag.h`.
+///
+/// If `PUSH_MAG` is true, we have a push-only magazine.  If it's
+/// false, we have a pop-only magazine.
 #[repr(C)]
-pub struct MagazineImpl {
+pub struct MagazineImpl<const PUSH_MAG: bool> {
     /// The `allocations` array is populated from the bottom up; the
     /// first `num_allocated` indices have values, and the remainder
     /// are uninitialised.
@@ -63,7 +66,7 @@ pub struct MagazineImpl {
     inner: &'static mut MagazineStorage,
 }
 
-impl MagazineImpl {
+impl<const PUSH_MAG: bool> MagazineImpl<PUSH_MAG> {
     // Disabled precondition: lifetimes are too hard for contracts.
     // #[requires(inner.link.is_none())]
     #[inline(always)]
@@ -156,29 +159,28 @@ impl MagazineImpl {
         }
     }
 
-    /// Attempts to get an unused block from the magazine.
-    #[invariant(self.check_rep(), "Representation makes sense.")]
-    #[ensures(old(self.is_empty()) == ret.is_none(),
-              "We only fail to pop from empty magazines.")]
-    #[ensures(ret.is_none() -> self.num_allocated == old(self.num_allocated),
-              "We don't change the stack size on failure.")]
-    #[ensures(ret.is_some() -> self.num_allocated == old(self.num_allocated) - 1,
-              "Must remove one element on success.")]
-    #[ensures(ret.is_some() -> ret.as_ref().unwrap().get().as_ptr() == old(self.peek()),
-              "Must return the top of stack on success.")]
-    #[inline(always)]
-    pub fn get(&mut self) -> Option<LinearRef> {
-        if self.num_allocated == 0 {
-            return None;
-        }
+    #[invariant(self.check_rep())]
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.num_allocated == MAGAZINE_SIZE
+    }
 
-        self.num_allocated -= 1;
-        let mut old = MaybeUninit::uninit();
-        std::mem::swap(
-            &mut old,
-            &mut self.inner.allocations[self.num_allocated as usize],
-        );
-        Some(unsafe { old.assume_init() })
+    #[invariant(self.check_rep())]
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.num_allocated == 0
+    }
+}
+
+// Functions that only exist on "push" magazines.
+impl MagazineImpl<true> {
+    /// Converts to a Pop magazine
+    #[cfg(test)]
+    pub fn into_pop(self) -> MagazineImpl<false> {
+        MagazineImpl {
+            num_allocated: self.num_allocated,
+            inner: self.inner,
+        }
     }
 
     /// Attempts to put an unused block back in the magazine.
@@ -210,6 +212,43 @@ impl MagazineImpl {
         }
         None
     }
+}
+
+// Functions that only exist on "pop" magazines.
+impl MagazineImpl<false> {
+    /// Converts to a Push magazine
+    #[cfg(test)]
+    pub fn into_push(self) -> MagazineImpl<true> {
+        MagazineImpl {
+            num_allocated: self.num_allocated,
+            inner: self.inner,
+        }
+    }
+
+    /// Attempts to get an unused block from the magazine.
+    #[invariant(self.check_rep(), "Representation makes sense.")]
+    #[ensures(old(self.is_empty()) == ret.is_none(),
+              "We only fail to pop from empty magazines.")]
+    #[ensures(ret.is_none() -> self.num_allocated == old(self.num_allocated),
+              "We don't change the stack size on failure.")]
+    #[ensures(ret.is_some() -> self.num_allocated == old(self.num_allocated) - 1,
+              "Must remove one element on success.")]
+    #[ensures(ret.is_some() -> ret.as_ref().unwrap().get().as_ptr() == old(self.peek()),
+              "Must return the top of stack on success.")]
+    #[inline(always)]
+    pub fn get(&mut self) -> Option<LinearRef> {
+        if self.num_allocated == 0 {
+            return None;
+        }
+
+        self.num_allocated -= 1;
+        let mut old = MaybeUninit::uninit();
+        std::mem::swap(
+            &mut old,
+            &mut self.inner.allocations[self.num_allocated as usize],
+        );
+        Some(unsafe { old.assume_init() })
+    }
 
     /// Returns a slice for the unused slots in the magazine
     // No invariant: they confuse the borrow checker.
@@ -224,18 +263,6 @@ impl MagazineImpl {
     #[inline(always)]
     pub fn commit_populated(&mut self, count: usize) {
         self.num_allocated += count as u32;
-    }
-
-    #[invariant(self.check_rep())]
-    #[inline]
-    pub fn is_full(&self) -> bool {
-        self.num_allocated == MAGAZINE_SIZE
-    }
-
-    #[invariant(self.check_rep())]
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.num_allocated == 0
     }
 }
 
@@ -270,7 +297,7 @@ impl Drop for MagazineStorage {
 #[test]
 fn smoke_test_magazine() {
     let rack = crate::rack::get_default_rack();
-    let mut mag = rack.allocate_empty_magazine().0;
+    let mut mag = rack.allocate_empty_magazine::</*PUSH_MAG=*/false>().0;
 
     // Getting an empty magazine should return None
     assert_eq!(mag.get(), None); // mag: []
@@ -278,39 +305,44 @@ fn smoke_test_magazine() {
     // And getting it again should still return None.
     assert_eq!(mag.get(), None); // mag: []
 
-    assert_eq!(mag.put(LinearRef::from_address(1)), None); // mag: [1]
-    assert_eq!(mag.put(LinearRef::from_address(2)), None); // mag: [1, 2]
+    let mut mag2 = mag.into_push();
 
+    assert_eq!(mag2.put(LinearRef::from_address(1)), None); // mag: [1]
+    assert_eq!(mag2.put(LinearRef::from_address(2)), None); // mag: [1, 2]
+
+    let mut mag3 = mag2.into_pop();
     {
-        let popped = mag.get().expect("should have a value"); // mag: [1]
+        let popped = mag3.get().expect("should have a value"); // mag: [1]
 
         assert_eq!(popped.get().as_ptr() as usize, 2);
         std::mem::forget(popped);
     }
 
-    assert_eq!(mag.put(LinearRef::from_address(3)), None); // mag: [1, 3]
+    let mut mag4 = mag3.into_push();
+    assert_eq!(mag4.put(LinearRef::from_address(3)), None); // mag: [1, 3]
 
+    let mut mag5 = mag4.into_pop();
     {
-        let popped = mag.get().expect("should have a value");
+        let popped = mag5.get().expect("should have a value");
 
         assert_eq!(popped.get().as_ptr() as usize, 3); // mag: [1]
         std::mem::forget(popped);
     }
 
     {
-        let popped = mag.get().expect("should have a value");
+        let popped = mag5.get().expect("should have a value");
 
         assert_eq!(popped.get().as_ptr() as usize, 1); // mag: []
         std::mem::forget(popped);
     }
 
-    rack.release_empty_magazine(crate::magazine::Magazine(mag));
+    rack.release_empty_magazine(crate::magazine::Magazine(mag5));
 }
 
 #[test]
 fn magazine_fill_up() {
     let rack = crate::rack::get_default_rack();
-    let mut mag = rack.allocate_empty_magazine().0;
+    let mut mag = rack.allocate_empty_magazine::</*PUSH_MAG=*/true>().0;
 
     // Fill up the magazine.
     for i in 1..=MAGAZINE_SIZE {
@@ -328,22 +360,24 @@ fn magazine_fill_up() {
 
     assert_eq!(mag.num_allocated, MAGAZINE_SIZE);
 
+    let mut pop_mag = mag.into_pop();
+
     // We should pop in LIFO order.
     for i in (1..=MAGAZINE_SIZE).rev() {
-        assert_eq!(mag.num_allocated, i);
-        let popped = mag.get().expect("has value");
+        assert_eq!(pop_mag.num_allocated, i);
+        let popped = pop_mag.get().expect("has value");
         assert_eq!(popped.get().as_ptr() as usize, i as usize);
         std::mem::forget(popped);
 
-        assert_eq!(mag.num_allocated, i - 1);
+        assert_eq!(pop_mag.num_allocated, i - 1);
     }
 
     // And now the magazine should be empty.
-    assert_eq!(mag.num_allocated, 0);
+    assert_eq!(pop_mag.num_allocated, 0);
     // So all subsequent `get()` calls will return None.
-    assert_eq!(mag.get(), None);
-    assert_eq!(mag.get(), None);
-    assert_eq!(mag.num_allocated, 0);
+    assert_eq!(pop_mag.get(), None);
+    assert_eq!(pop_mag.get(), None);
+    assert_eq!(pop_mag.num_allocated, 0);
 
-    rack.release_empty_magazine(crate::magazine::Magazine(mag));
+    rack.release_empty_magazine(crate::magazine::Magazine(pop_mag));
 }

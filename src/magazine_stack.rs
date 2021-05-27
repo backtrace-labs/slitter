@@ -54,7 +54,7 @@ impl MagazineStack {
     #[requires(mag.check_rep(None).is_ok(),
                "Magazine must make sense.")]
     #[inline(always)]
-    pub fn push(&self, mag: Magazine) {
+    pub fn push<const PUSH_MAG: bool>(&self, mag: Magazine<PUSH_MAG>) {
         unsafe { slitter__stack_push(&self, mag.0.storage().into()) };
     }
 
@@ -62,7 +62,7 @@ impl MagazineStack {
               ret.as_ref().unwrap().check_rep(None).is_ok(),
               "Magazine should make sense.")]
     #[inline(always)]
-    pub fn pop(&self) -> Option<Magazine> {
+    pub fn pop<const PUSH_MAG: bool>(&self) -> Option<Magazine<PUSH_MAG>> {
         if self.top_of_stack.load(Ordering::Relaxed).is_null() {
             return None;
         }
@@ -82,7 +82,7 @@ impl MagazineStack {
               ret.as_ref().unwrap().check_rep(None).is_ok(),
               "Magazine should make sense.")]
     #[inline(always)]
-    pub fn try_pop(&self) -> Option<Magazine> {
+    pub fn try_pop<const PUSH_MAG: bool>(&self) -> Option<Magazine<PUSH_MAG>> {
         if self.top_of_stack.load(Ordering::Relaxed).is_null() {
             return None;
         }
@@ -109,14 +109,15 @@ fn magazine_stack_smoke_test() {
     let rack = crate::rack::get_default_rack();
     let stack = MagazineStack::new();
 
-    stack.push(rack.allocate_empty_magazine());
-    stack.push(rack.allocate_empty_magazine());
+    // Push/pop shouldn't care about the magazines' polarity.
+    stack.push(rack.allocate_empty_magazine::<false>());
+    stack.push(rack.allocate_empty_magazine::<true>());
 
-    assert!(stack.pop().is_some());
+    assert!(stack.pop::<false>().is_some());
 
-    stack.push(rack.allocate_empty_magazine());
-    assert!(stack.pop().is_some());
-    assert!(stack.pop().is_some());
+    stack.push(rack.allocate_empty_magazine::<true>());
+    assert!(stack.pop::<true>().is_some());
+    assert!(stack.pop::<false>().is_some());
 
-    assert!(stack.pop().is_none());
+    assert!(stack.pop::<true>().is_none());
 }

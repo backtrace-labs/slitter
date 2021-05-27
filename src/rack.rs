@@ -38,10 +38,21 @@ impl Rack {
                 slitter__magazine_storage_sizeof()
             );
             assert_eq!(
-                std::mem::size_of::<MagazineImpl>(),
+                std::mem::size_of::<MagazineImpl<true>>(),
                 slitter__magazine_sizeof()
             );
-            assert_eq!(std::mem::size_of::<Magazine>(), slitter__magazine_sizeof());
+            assert_eq!(
+                std::mem::size_of::<MagazineImpl<false>>(),
+                slitter__magazine_sizeof()
+            );
+            assert_eq!(
+                std::mem::size_of::<Magazine<true>>(),
+                slitter__magazine_sizeof()
+            );
+            assert_eq!(
+                std::mem::size_of::<Magazine<false>>(),
+                slitter__magazine_sizeof()
+            );
         }
 
         Self {
@@ -60,15 +71,17 @@ pub fn get_default_rack() -> &'static Rack {
 impl Rack {
     #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
     #[inline(always)]
-    pub fn allocate_empty_magazine(&self) -> Magazine {
+    pub fn allocate_empty_magazine<const PUSH_MAG: bool>(&self) -> Magazine<PUSH_MAG> {
         self.freelist
             .pop()
             .unwrap_or_else(|| Magazine(MagazineImpl::new(Box::leak(Box::new(Default::default())))))
     }
 
     #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]
-    #[inline(always)]
-    pub fn release_empty_magazine(&self, mag: Magazine) {
+    pub fn release_empty_magazine<const PUSH_MAG: bool>(&self, mag: Magazine<PUSH_MAG>) {
+        // This function is only called during thread shutdown, and
+        // things will really break if mag is actually non-empty.
+        assert!(mag.is_empty());
         self.freelist.push(mag);
     }
 }
@@ -76,7 +89,7 @@ impl Rack {
 #[test]
 fn smoke_test_rack() {
     let rack = get_default_rack();
-    let mag = rack.allocate_empty_magazine();
+    let mag = rack.allocate_empty_magazine::<true>();
 
     rack.release_empty_magazine(mag);
 }

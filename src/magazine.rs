@@ -42,10 +42,16 @@ use crate::magazine_impl::MagazineImpl;
 /// A Magazine is a thin wrapper around MagazineImpl: the wrapping
 /// lets us impose a tighter contract on the interface used in the
 /// allocator, while keeping the internal implementation testable.
+///
+/// A `PUSH_MAG: true` magazine can only grow, and a `PUSH_MAG: false`
+/// one can only shrink.
 #[repr(transparent)]
-pub struct Magazine(pub(crate) MagazineImpl);
+pub struct Magazine<const PUSH_MAG: bool>(pub(crate) MagazineImpl<PUSH_MAG>);
 
-impl Magazine {
+pub type PushMagazine = Magazine<true>;
+pub type PopMagazine = Magazine<false>;
+
+impl<const PUSH_MAG: bool> Magazine<PUSH_MAG> {
     /// Checks that current object's state is valid.
     ///
     /// If a class is provided, all allocations must match it.
@@ -72,13 +78,18 @@ impl Magazine {
         Ok(())
     }
 
-    /// Attempts to get an unused block from the magazine.
-    #[invariant(self.check_rep(None).is_ok())]
     #[inline(always)]
-    pub fn get(&mut self) -> Option<LinearRef> {
-        self.0.get()
+    pub fn is_full(&self) -> bool {
+        self.0.is_full()
     }
 
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Magazine</*PUSH_MAG=*/ true> {
     /// Attempts to put an unused block back in the magazine.
     ///
     /// Returns that unused block on failure.
@@ -86,6 +97,15 @@ impl Magazine {
     #[inline(always)]
     pub fn put(&mut self, freed: LinearRef) -> Option<LinearRef> {
         self.0.put(freed)
+    }
+}
+
+impl Magazine</*PUSH_MAG=*/ false> {
+    /// Attempts to get an unused block from the magazine.
+    #[invariant(self.check_rep(None).is_ok())]
+    #[inline(always)]
+    pub fn get(&mut self) -> Option<LinearRef> {
+        self.0.get()
     }
 
     /// Returns a slice for the unused slots in the magazine
@@ -100,16 +120,6 @@ impl Magazine {
     fn commit_populated(&mut self, count: usize) {
         self.0.commit_populated(count)
     }
-
-    #[inline(always)]
-    pub fn is_full(&self) -> bool {
-        self.0.is_full()
-    }
-
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 impl crate::class::ClassInfo {
@@ -118,7 +128,7 @@ impl crate::class::ClassInfo {
     #[ensures(ret.check_rep(Some(self.id)).is_ok(),
               "Returned magazine makes sense for class.")]
     #[inline(never)]
-    pub(crate) fn allocate_magazine(&self) -> Magazine {
+    pub(crate) fn allocate_magazine<const PUSH_MAG: bool>(&self) -> Magazine<PUSH_MAG> {
         self.partial_mags
             .try_pop()
             .or_else(|| self.full_mags.pop())
@@ -132,7 +142,7 @@ impl crate::class::ClassInfo {
               ret.as_ref().unwrap().check_rep(Some(self.id)).is_ok(),
               "Returned magazine makes sense for class.")]
     #[inline(never)]
-    pub(crate) fn get_cached_magazine(&self) -> Option<Magazine> {
+    pub(crate) fn get_cached_magazine(&self) -> Option<PopMagazine> {
         self.partial_mags.pop().or_else(|| self.full_mags.pop())
     }
 
@@ -141,7 +151,7 @@ impl crate::class::ClassInfo {
     #[ensures(ret.check_rep(Some(self.id)).is_ok(),
               "Returned magazine makes sense for class.")]
     #[inline(never)]
-    pub(crate) fn allocate_non_full_magazine(&self) -> Magazine {
+    pub(crate) fn allocate_non_full_magazine(&self) -> PushMagazine {
         self.partial_mags
             .pop()
             .unwrap_or_else(|| self.rack.allocate_empty_magazine())
@@ -166,7 +176,7 @@ impl crate::class::ClassInfo {
               press::check_allocation(self.id, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(never)]
-    pub(crate) fn refill_magazine(&self, mag: &mut Magazine) -> Option<LinearRef> {
+    pub(crate) fn refill_magazine(&self, mag: &mut PopMagazine) -> Option<LinearRef> {
         // Try to get a new non-empty magazine; prefer partial mags
         // because we prefer to have 0 partial mags.
         if let Some(mut new_mag) = self.partial_mags.try_pop().or_else(|| self.full_mags.pop()) {
@@ -198,7 +208,7 @@ impl crate::class::ClassInfo {
     #[requires(press::check_allocation(self.id, spilled.get().as_ptr() as usize).is_ok(),
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(never)]
-    pub(crate) fn clear_magazine(&self, mag: &mut Magazine, spilled: LinearRef) {
+    pub(crate) fn clear_magazine(&self, mag: &mut PushMagazine, spilled: LinearRef) {
         // Get a new non-full magazine.
         let mut new_mag = self
             .partial_mags
@@ -216,7 +226,7 @@ impl crate::class::ClassInfo {
     #[requires(mag.check_rep(Some(self.id)).is_ok(),
                "Magazine must match `self`.")]
     #[inline(never)]
-    pub(crate) fn release_magazine(&self, mag: Magazine) {
+    pub(crate) fn release_magazine<const PUSH_MAG: bool>(&self, mag: Magazine<PUSH_MAG>) {
         if mag.is_empty() {
             self.rack.release_empty_magazine(mag);
         } else if mag.is_full() {
