@@ -33,15 +33,25 @@ void *
 slitter_allocate(struct slitter_class class)
 {
 	struct magazine *restrict mag;
+	size_t next_index;
 	uint32_t id = class.id;
 
 	if (__builtin_expect(id >= slitter_cache.n, 0))
 		return slitter__allocate_slow(class);
 
 	mag = &slitter_cache.mags[id].alloc;
+	if (__builtin_usubl_overflow(mag->top_of_stack, 2, &next_index)) {
+		next_index++;
+	}
+
 	if (__builtin_expect(slitter__magazine_is_exhausted(mag), 0))
 		return slitter__allocate_slow(class);
 
+	/*
+	 * The magazine was not empty, so next_index did not overflow
+	 * by more than 1.
+	 */
+	__builtin_prefetch(mag->storage->allocations[next_index], 1);
 	return slitter__magazine_get_non_empty(mag);
 }
 
