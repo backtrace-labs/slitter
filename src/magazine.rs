@@ -45,6 +45,10 @@ use crate::magazine_impl::MagazineImpl;
 ///
 /// A `PUSH_MAG: true` magazine can only grow, and a `PUSH_MAG: false`
 /// one can only shrink.
+///
+/// The default for Push magazines is always full, and the default Pop
+/// magazine is always empty.
+#[derive(Default)]
 #[repr(transparent)]
 pub struct Magazine<const PUSH_MAG: bool>(pub(crate) MagazineImpl<PUSH_MAG>);
 
@@ -76,6 +80,13 @@ impl<const PUSH_MAG: bool> Magazine<PUSH_MAG> {
         }
 
         Ok(())
+    }
+
+    /// Returns whether this magazine is backed by real storage, and
+    /// thus has capacity.
+    #[inline(always)]
+    pub fn has_storage(&self) -> bool {
+        self.0.has_storage()
     }
 
     #[inline(always)]
@@ -123,18 +134,6 @@ impl Magazine</*PUSH_MAG=*/ false> {
 }
 
 impl crate::class::ClassInfo {
-    /// Returns a magazine; it may be empty, full, or partially
-    /// populated.
-    #[ensures(ret.check_rep(Some(self.id)).is_ok(),
-              "Returned magazine makes sense for class.")]
-    #[inline(never)]
-    pub(crate) fn allocate_magazine<const PUSH_MAG: bool>(&self) -> Magazine<PUSH_MAG> {
-        self.partial_mags
-            .try_pop()
-            .or_else(|| self.full_mags.pop())
-            .unwrap_or_else(|| self.rack.allocate_empty_magazine())
-    }
-
     /// Returns a cached magazine; it is never empty.
     #[ensures(ret.is_some() -> !ret.as_ref().unwrap().is_empty(),
               "On success, the magazine is non-empty.")]
@@ -187,6 +186,18 @@ impl crate::class::ClassInfo {
             self.release_magazine(new_mag);
 
             return allocated;
+        }
+
+        // Make sure we have capacity for `allocate_many_objects()` to
+        // do something useful.
+        if !mag.has_storage() {
+            // We only enter this branch at most once per thread per
+            // allocation class: the thread cache starts with a dummy
+            // magazine, and we upgrade to a real one here.
+            let mut new_mag = self.rack.allocate_empty_magazine();
+            std::mem::swap(&mut new_mag, mag);
+
+            self.release_magazine(new_mag);
         }
 
         let (count, allocated) = self.press.allocate_many_objects(mag.get_unpopulated());

@@ -69,7 +69,7 @@ pub fn get_default_rack() -> &'static Rack {
 }
 
 impl Rack {
-    #[ensures(ret.is_empty(), "Newly allocated magazines are empty.")]
+    #[ensures(ret.has_storage() && ret.is_empty(), "Newly allocated magazines are empty.")]
     #[inline(always)]
     pub fn allocate_empty_magazine<const PUSH_MAG: bool>(&self) -> Magazine<PUSH_MAG> {
         self.freelist.pop().unwrap_or_else(|| {
@@ -79,11 +79,11 @@ impl Rack {
         })
     }
 
-    #[requires(mag.is_empty(), "Only empty magazines are released to the Rack.")]
+    #[requires(!mag.has_storage() || mag.is_empty(), "Only empty magazines are released to the Rack.")]
     pub fn release_empty_magazine<const PUSH_MAG: bool>(&self, mag: Magazine<PUSH_MAG>) {
         // This function is only called during thread shutdown, and
         // things will really break if mag is actually non-empty.
-        assert!(mag.is_empty());
+        assert!(!mag.has_storage() || mag.is_empty());
         self.freelist.push(mag);
     }
 }

@@ -157,8 +157,8 @@ impl Cache {
                 return Err("Dummy cache entry has a non-empty allocation magazine.");
             }
 
-            if !dummy.release_mag.is_empty() {
-                return Err("Dummy cache entry has a non-empty allocation magazine.");
+            if !dummy.release_mag.is_full() {
+                return Err("Dummy cache entry has a non-full release magazine.");
             }
         }
 
@@ -193,18 +193,9 @@ impl Cache {
             let id = NonZeroU32::new(self.per_class.len() as u32);
             let info = id.and_then(|id| Class::from_id(id).map(|class| class.info()));
 
-            let (allocation_mag, release_mag) = if let Some(i) = info {
-                (i.allocate_magazine(), i.allocate_non_full_magazine())
-            } else {
-                (
-                    crate::rack::get_default_rack().allocate_empty_magazine(),
-                    crate::rack::get_default_rack().allocate_empty_magazine(),
-                )
-            };
-
             self.per_class.push(ClassCache {
-                allocation_mag,
-                release_mag,
+                allocation_mag: Default::default(),
+                release_mag: Default::default(),
                 info,
             })
         }

@@ -107,6 +107,13 @@ impl<const PUSH_MAG: bool> MagazineImpl<PUSH_MAG> {
         }
     }
 
+    /// Returns whether this magazine is backed by real storage, and
+    /// thus has capacity.
+    #[inline(always)]
+    pub fn has_storage(&self) -> bool {
+        self.inner.is_some()
+    }
+
     // Disabled postcondition: lifetimes are too hard for contracts.
     // #[requires(self.check_rep())]
     // #[ensures(ret.link.is_none())]
@@ -218,6 +225,13 @@ impl<const PUSH_MAG: bool> MagazineImpl<PUSH_MAG> {
             .iter()
             .take(self.len())
             .all(|entry| !entry.as_ptr().is_null())
+    }
+}
+
+impl<const PUSH_MAG: bool> Default for MagazineImpl<PUSH_MAG> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new(None)
     }
 }
 
