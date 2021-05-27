@@ -107,9 +107,12 @@ pub fn allocate(class: Class) -> Option<LinearRef> {
           "Sucessful allocations must have the allocation metadata set correctly.")]
 #[no_mangle]
 pub extern "C" fn slitter__allocate_slow(class: Class) -> Option<LinearRef> {
-    CACHE
+    let ret = CACHE
         .try_with(|cache| cache.borrow_mut().allocate_slow(class))
-        .unwrap_or_else(|_| class.info().allocate_slow())
+        .unwrap_or_else(|_| class.info().allocate_slow());
+    assert!(ret.is_some(), "Allocation failed");
+
+    ret
 }
 
 /// Returns an allocation back to this `class`.
