@@ -37,6 +37,18 @@ use crate::magazine::PopMagazine;
 use crate::magazine::PushMagazine;
 use crate::Class;
 
+/// Inline the cache array for up to this many allocation classes.
+const SMALL_CACHE_SIZE: usize = 3;
+
+#[derive(Default)]
+#[repr(C)]
+struct Magazines {
+    /// The cache allocates from this magazine.
+    alloc: PopMagazine,
+    /// The cache releases into theis magazine.
+    release: PushMagazine,
+}
+
 /// For each allocation class, we cache up to one magazine's worth of
 /// allocations, and another magazine's worth of newly deallocated
 /// objects.
@@ -47,25 +59,16 @@ use crate::Class;
 /// We instead use two magazines to let us do smarter things on
 /// deallocation (e.g., more easily check for double free or take
 /// advantage of pre-zeroed out allocations).
-struct ClassCache {
-    /// The cache allocates from this magazine.
-    allocation_mag: PopMagazine,
-    /// The cache releases into this magazine.
-    release_mag: PushMagazine,
-
-    /// The `info` field is only `None` for the dummy entry we keep
-    /// around for the invalid "0" class id.
-    info: Option<&'static ClassInfo>,
-}
-
-/// Inline the cache array for up to this many allocation classes.
-const SMALL_CACHE_SIZE: usize = 3;
-
+///
+/// The cache consists of parallel vectors that are directly indexed
+/// with the class id; the first element at index 0 is thus never
+/// used, so we must increment SMALL_CACHE_SIZE by 1.
 struct Cache {
-    // This vector is directly indexed with the class id; the first
-    // element at index 0 is thus never used, so we must increment
-    // SMALL_CACHE_SIZE by 1.
-    per_class: SmallVec<[ClassCache; SMALL_CACHE_SIZE + 1]>,
+    per_class: SmallVec<[Magazines; SMALL_CACHE_SIZE + 1]>,
+    /// This parallel vector holds a reference to ClassInfo; it is
+    /// only `None` for the dummy entry we keep around for the invalid
+    /// "0" class id.
+    per_class_info: SmallVec<[Option<&'static ClassInfo>; SMALL_CACHE_SIZE + 1]>,
 }
 
 // TODO: keyed thread-local is slow.  We should `#![feature(thread_local)]`
@@ -153,19 +156,21 @@ pub extern "C" fn slitter__release_slow(class: Class, block: LinearRef) {
 
 impl Drop for Cache {
     #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
-    #[ensures(self.per_class.is_empty(), "The cache must be empty before dropping.")]
+    #[ensures(self.per_class_info.is_empty(), "The cache must be empty before dropping.")]
     fn drop(&mut self) {
-        while let Some(slot) = self.per_class.pop() {
-            if let Some(info) = slot.info {
-                info.release_magazine(slot.allocation_mag);
-                info.release_magazine(slot.release_mag);
+        while let Some(slot) = self.per_class_info.pop() {
+            if let Some(info) = slot {
+                let mags = self.per_class.pop().expect("lengths must match");
+                info.release_magazine(mags.alloc);
+                info.release_magazine(mags.release);
             } else {
                 // This must be the padding slot at index 0.
-                assert!(self.per_class.is_empty());
+                assert!(self.per_class_info.is_empty());
 
                 let default_rack = crate::rack::get_default_rack();
-                default_rack.release_empty_magazine(slot.allocation_mag);
-                default_rack.release_empty_magazine(slot.release_mag);
+                let mags = self.per_class.pop().expect("lengths must match");
+                default_rack.release_empty_magazine(mags.alloc);
+                default_rack.release_empty_magazine(mags.release);
             }
         }
     }
@@ -175,6 +180,7 @@ impl Cache {
     fn new() -> Cache {
         Cache {
             per_class: SmallVec::new(),
+            per_class_info: SmallVec::new(),
         }
     }
 
@@ -184,34 +190,34 @@ impl Cache {
         feature = "check_contracts"
     ))]
     fn check_rep_or_err(&self) -> Result<(), &'static str> {
+        if self.per_class.len() != self.per_class_info.len() {
+            return Err("Vectors of magazines and info have different lengths.");
+        }
+
         if !self
-            .per_class
+            .per_class_info
             .iter()
             .enumerate()
-            .all(|(i, x)| i == 0 || x.info.unwrap().id.id().get() as usize == i)
+            .all(|(i, x)| i == 0 || x.unwrap().id.id().get() as usize == i)
         {
             return Err("Some cache entries are missing their info.");
         }
 
-        if let Some(dummy) = self.per_class.get(0) {
-            if !dummy.allocation_mag.is_empty() {
+        if let Some(_) = self.per_class_info.get(0) {
+            if !self.per_class[0].alloc.is_empty() {
                 return Err("Dummy cache entry has a non-empty allocation magazine.");
             }
 
-            if !dummy.release_mag.is_full() {
+            if !self.per_class[0].release.is_full() {
                 return Err("Dummy cache entry has a non-full release magazine.");
             }
         }
 
         // All magazines must be in a good state, and only contain
         // *available* allocations for the correct class.
-        for class_cache in &self.per_class {
-            class_cache
-                .allocation_mag
-                .check_rep(class_cache.info.map(|info| info.id))?;
-            class_cache
-                .release_mag
-                .check_rep(class_cache.info.map(|info| info.id))?;
+        for (mags, info) in self.per_class.iter().zip(&self.per_class_info) {
+            mags.alloc.check_rep(info.map(|info| info.id))?;
+            mags.release.check_rep(info.map(|info| info.id))?;
         }
 
         Ok(())
@@ -234,11 +240,8 @@ impl Cache {
             let id = NonZeroU32::new(self.per_class.len() as u32);
             let info = id.and_then(|id| Class::from_id(id).map(|class| class.info()));
 
-            self.per_class.push(ClassCache {
-                allocation_mag: Default::default(),
-                release_mag: Default::default(),
-                info,
-            })
+            self.per_class.push(Default::default());
+            self.per_class_info.push(info);
         }
     }
 
@@ -259,15 +262,14 @@ impl Cache {
             self.grow();
         }
 
-        let entry = &mut self.per_class[index];
-        if let Some(alloc) = entry.allocation_mag.get() {
+        let mag = &mut self.per_class[index].alloc;
+        if let Some(alloc) = mag.get() {
             return Some(alloc);
         }
 
-        entry
-            .info
+        self.per_class_info[index]
             .expect("must have class info")
-            .refill_magazine(&mut entry.allocation_mag)
+            .refill_magazine(mag)
     }
 
     /// Attempts to return an allocation for `class`.  Consumes from
@@ -303,14 +305,13 @@ impl Cache {
             self.grow();
         }
 
-        let entry = &mut self.per_class[index];
+        let mag = &mut self.per_class[index].release;
         // We prefer to cache freshly deallocated objects, for
         // temporal locality.
-        if let Some(spill) = entry.release_mag.put(block) {
-            entry
-                .info
+        if let Some(spill) = mag.put(block) {
+            self.per_class_info[index]
                 .expect("must have class info")
-                .clear_magazine(&mut entry.release_mag, spill);
+                .clear_magazine(mag, spill);
         }
     }
 
