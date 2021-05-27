@@ -18,6 +18,12 @@ lazy_static::lazy_static! {
 
 /// Confirms that it makes sense to return this allocation to the mutator.
 pub fn can_be_allocated(class: Class, alloc: &NonNull<c_void>) -> Result<(), &'static str> {
+    let alignment = class.info().layout.align();
+
+    if (alloc.as_ptr() as usize % alignment) != 0 {
+        return Err("misaligned address");
+    }
+
     let map = ALLOCATION_STATE_MAP.lock().unwrap();
 
     if let Some(info) = map.get(&(alloc.as_ptr() as usize)) {
@@ -35,6 +41,12 @@ pub fn can_be_allocated(class: Class, alloc: &NonNull<c_void>) -> Result<(), &'s
 
 /// Marks this allocation as returned to the mutator.
 pub fn mark_allocated(class: Class, alloc: &NonNull<c_void>) -> Result<(), &'static str> {
+    let alignment = class.info().layout.align();
+
+    if (alloc.as_ptr() as usize % alignment) != 0 {
+        return Err("misaligned address");
+    }
+
     let mut map = ALLOCATION_STATE_MAP.lock().unwrap();
     let mut info = map
         .entry(alloc.as_ptr() as usize)

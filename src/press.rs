@@ -110,6 +110,7 @@ impl Press {
         }
 
         layout = layout.pad_to_align();
+        assert_eq!(layout.size() % layout.align(), 0);
 
         if layout.size() > MAX_SPAN_SIZE / 2 {
             Err("Class elements too large (after alignment)")
@@ -175,6 +176,8 @@ impl Press {
                "The `meta` reference must come from a metadata range.")]
     #[ensures(ret.is_some() -> ret.unwrap().1.get() <= max_count.get(),
               "We never return more than `max_count` allocations.")]
+    #[ensures(ret.is_some() -> ret.unwrap().0.get() as usize % self.layout.align() == 0,
+              "The base address is correctly aligned.")]
     #[ensures(ret.is_some() -> self.associate_range(ret.unwrap().0.get(), ret.unwrap().1.get()).is_ok(),
               "On success, it must be possible to associate the returned address with `self.class`.")]
     #[ensures(ret.is_some() ->
@@ -205,7 +208,9 @@ impl Press {
         // we always return fresh addresses.
         //
         // XXX: This expression has to satisfy the `ensures`
-        // postconditions, checked in `assert_new_bump_is_safe`.
+        // postconditions; they're checked in
+        // `assert_new_bump_is_safe`, including the alignment
+        // of `span_begin`.
         Some((
             NonZeroUsize::new(meta.span_begin + allocated_id * self.layout.size())?,
             NonZeroUsize::new(actual)?,
@@ -225,6 +230,8 @@ impl Press {
         );
 
         let meta = unsafe { bump.as_mut() }.expect("must be valid");
+
+        assert_eq!(meta.span_begin % self.layout.align(), 0);
 
         for i in 0..meta.bump_limit as usize {
             let address = meta.span_begin + i * self.layout.size();
@@ -250,6 +257,7 @@ impl Press {
     fn try_replace_span(&self, expected: *mut SpanMetadata) -> Result<(), i32> {
         if self.bump.load(Ordering::Relaxed) != expected {
             // Someone else made progress.
+
             return Ok(());
         }
 

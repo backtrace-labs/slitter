@@ -21,9 +21,14 @@ lazy_static::lazy_static! {
 pub fn associate_class(class: Class, alloc: usize) -> Result<(), &'static str> {
     let info = class.info();
     let size = info.layout.size();
+    let alignment = info.layout.align();
 
     if usize::MAX - alloc < size {
         return Err("Address is too high.");
+    }
+
+    if (alloc % alignment) != 0 {
+        return Err("Address is misaligned.");
     }
 
     let mut map = ALLOCATION_TYPE_MAP.lock().unwrap();
