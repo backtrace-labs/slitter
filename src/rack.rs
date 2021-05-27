@@ -26,13 +26,13 @@ impl Rack {
         use crate::magazine_impl::MAGAZINE_SIZE;
 
         extern "C" {
-            fn slitter__magazine_capacity() -> usize;
+            fn slitter__magazine_size() -> usize;
             fn slitter__magazine_storage_sizeof() -> usize;
             fn slitter__magazine_sizeof() -> usize;
         }
 
         unsafe {
-            assert_eq!(MAGAZINE_SIZE as usize, slitter__magazine_capacity());
+            assert_eq!(MAGAZINE_SIZE as usize, slitter__magazine_size());
             assert_eq!(
                 std::mem::size_of::<MagazineStorage>(),
                 slitter__magazine_storage_sizeof()

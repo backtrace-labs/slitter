@@ -262,7 +262,7 @@ pub fn get_default_mill() -> &'static Mill {
         static ref DEFAULT_MILL: &'static Mill = {
             let default_mapper = Box::leak(Box::new(DefaultMapper{}));
 
-            Box::leak(Box::new(Mill{ mapper: default_mapper, current_chunk: Default::default() }))
+            Box::leak(Box::new(Mill::new(default_mapper)))
         };
     };
 
@@ -580,6 +580,27 @@ impl<'a> AllocatedChunk<'a> {
 }
 
 impl Mill {
+    pub fn new(mapper: &'static dyn Mapper) -> Self {
+        extern "C" {
+            fn slitter__data_alignment() -> usize;
+            fn slitter__guard_page_size() -> usize;
+            fn slitter__metadata_page_size() -> usize;
+            fn slitter__span_alignment() -> usize;
+        }
+
+        unsafe {
+            assert_eq!(DATA_ALIGNMENT, slitter__data_alignment());
+            assert_eq!(GUARD_PAGE_SIZE, slitter__guard_page_size());
+            assert_eq!(METADATA_PAGE_SIZE, slitter__metadata_page_size());
+            assert_eq!(SPAN_ALIGNMENT, slitter__span_alignment());
+        }
+
+        Self {
+            mapper,
+            current_chunk: Default::default(),
+        }
+    }
+
     /// Returns a fresh chunk from `mapper`.
     #[ensures(ret.is_ok() ->
               debug_arange_map::is_metadata(ret.as_ref().unwrap().meta as usize,

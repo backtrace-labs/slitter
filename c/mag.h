@@ -5,10 +5,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#ifndef SLITTER__MAGAZINE_SIZE
-/* Must match the default in magazine_impl.rs */
-#define SLITTER__MAGAZINE_SIZE 30
-#endif
+#include "constants.h"
 
 /**
  * Matches `MagazineStorage` on the Rust side.
@@ -87,14 +84,6 @@ void *slitter__magazine_get(struct magazine *restrict mag);
  * Returns NULL on success, `alloc` on failure.
  */
 void *slitter__magazine_put(struct magazine *restrict mag, void *alloc);
-
-/**
- * Returns the value of the `SLITTER__MAGAZINE_SIZE` constant on the C side.
- *
- * The Rust code uses this function to confirm that the constant has
- * the same value on both sides.
- */
-size_t slitter__magazine_capacity(void);
 
 /**
  * Returns `sizeof(struct magazine_storage)`.
