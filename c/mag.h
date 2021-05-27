@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #ifndef SLITTER__MAGAZINE_SIZE
 /* Must match the default in magazine_impl.rs */
@@ -23,9 +24,14 @@ struct magazine_storage {
 
 /**
  * Matches `MagazineImpl` on the Rust side.
+ *
+ * `top_of_stack` goes from MAGAZINE_SIZE to 0 when popping,
+ * and from -MAGAZINE_SIZE to 0 when pushing.  In both cases,
+ * `storage->allocations` is populated with cached objects
+ * at low indices, and empty / garbage at high ones.
  */
 struct magazine {
-	uint32_t num_allocated;
+	ssize_t top_of_stack;
 	struct magazine_storage *storage;
 };
 
