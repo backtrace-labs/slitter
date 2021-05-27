@@ -79,8 +79,21 @@ impl ClassInfo {
             assert!(allocated.is_some());
 
             self.release_magazine(mag);
+            if self.zero_init {
+                unsafe {
+                    std::ptr::write_bytes(
+                        allocated.as_ref().unwrap().get().as_ptr() as *mut u8,
+                        0,
+                        self.layout.size(),
+                    );
+                }
+            }
+
             allocated
         } else {
+            // We can assume the press always allocates zero-filled
+            // objects: we require that the underlying mapper only
+            // give us zero-filled memory.
             self.press.allocate_one_object()
         }
     }

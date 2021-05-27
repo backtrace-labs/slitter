@@ -41,10 +41,22 @@ pub fn can_be_allocated(class: Class, alloc: &NonNull<c_void>) -> Result<(), &'s
 
 /// Marks this allocation as returned to the mutator.
 pub fn mark_allocated(class: Class, alloc: &NonNull<c_void>) -> Result<(), &'static str> {
-    let alignment = class.info().layout.align();
+    let info = class.info();
+    let alignment = info.layout.align();
 
     if (alloc.as_ptr() as usize % alignment) != 0 {
         return Err("misaligned address");
+    }
+
+    // Confirm that `alloc` is all zero if necessary.
+    if info.zero_init {
+        let ptr = alloc.as_ptr() as *const u8;
+
+        for i in 0..info.layout.size() {
+            if unsafe { std::ptr::read(ptr.add(i)) } != 0 {
+                return Err("non zero-filled allocation");
+            }
+        }
     }
 
     let mut map = ALLOCATION_STATE_MAP.lock().unwrap();

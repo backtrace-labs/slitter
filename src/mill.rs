@@ -179,6 +179,8 @@ pub trait Mapper: std::fmt::Debug + Sync {
     /// Prepares a page-aligned range of metadata for read and write
     /// access.  The `allocate`d range is always a subset of a range
     /// that was returned by a single `reserve` call.
+    ///
+    /// On successful return, the range must be zero-filled.
     #[requires(debug_arange_map::can_mark_metadata(base.as_ptr() as usize, size).is_ok())]
     #[ensures(ret.is_ok() -> debug_arange_map::mark_metadata(base.as_ptr() as usize, size).is_ok())]
     fn allocate_meta(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;
@@ -186,6 +188,8 @@ pub trait Mapper: std::fmt::Debug + Sync {
     /// Prepares a page-aligned range of object data for read and
     /// write access.  The `allocate`d range is always a subset of a
     /// range that was returned by a single `reserve` call.
+    ///
+    /// On successful return, the range must be zero-filled.
     #[requires(debug_arange_map::can_mark_data(base.as_ptr() as usize, size).is_ok())]
     #[ensures(ret.is_ok() -> debug_arange_map::mark_data(base.as_ptr() as usize, size).is_ok())]
     fn allocate_data(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32>;

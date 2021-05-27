@@ -119,6 +119,12 @@ impl Magazine</*PUSH_MAG=*/ false> {
         self.0.get()
     }
 
+    /// Returns a slice for the used slots in the magazine
+    #[inline(always)]
+    fn get_populated(&self) -> &[MaybeUninit<LinearRef>] {
+        self.0.get_populated()
+    }
+
     /// Returns a slice for the unused slots in the magazine
     #[inline(always)]
     fn get_unpopulated(&mut self) -> &mut [MaybeUninit<LinearRef>] {
@@ -163,6 +169,8 @@ impl crate::class::ClassInfo {
     /// one allocation (the return value) short of full.
     #[invariant(mag.check_rep(Some(self.id)).is_ok(),
                "Magazine must match `self`.")]
+    #[requires(mag.is_empty(),
+               "Magazine must be empty on entry.")]
     #[ensures(ret.is_none() -> mag.is_empty(),
               "Allocation never fails when the magazine is non-empty.")]
     #[ensures(ret.is_some() ->
@@ -180,6 +188,19 @@ impl crate::class::ClassInfo {
         // because we prefer to have 0 partial mags.
         if let Some(mut new_mag) = self.partial_mags.try_pop().or_else(|| self.full_mags.pop()) {
             assert!(!new_mag.is_empty());
+
+            if self.zero_init {
+                for allocation in new_mag.get_populated() {
+                    unsafe {
+                        let alloc = &*allocation.as_ptr();
+                        std::ptr::write_bytes(
+                            alloc.get().as_ptr() as *mut u8,
+                            0,
+                            self.layout.size(),
+                        );
+                    }
+                }
+            }
 
             let allocated = new_mag.get();
             std::mem::swap(&mut new_mag, mag);

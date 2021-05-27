@@ -367,6 +367,17 @@ impl MagazineImpl<false> {
         Some(unsafe { old.assume_init() })
     }
 
+    /// Returns a slice for the used slots in the magazine
+    // No invariant: they confuse the borrow checker.
+    #[inline(always)]
+    pub fn get_populated(&self) -> &[MaybeUninit<LinearRef>] {
+        if let Some(inner) = &self.inner {
+            &inner.allocations[0..self.top_of_stack as usize]
+        } else {
+            &[]
+        }
+    }
+
     /// Returns a slice for the unused slots in the magazine
     // No invariant: they confuse the borrow checker.
     #[inline(always)]

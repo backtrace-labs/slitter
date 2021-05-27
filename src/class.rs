@@ -37,6 +37,7 @@ pub struct Class {
 pub struct ClassConfig {
     pub name: Option<String>,
     pub layout: Layout,
+    pub zero_init: bool,
 }
 
 /// The extern "C" interface uses this version of `ClassConfig`.
@@ -44,6 +45,7 @@ pub struct ClassConfig {
 pub struct ForeignClassConfig {
     name: *const c_char,
     size: usize,
+    zero_init: bool,
 }
 
 /// Slitter stores internal information about configured classes with
@@ -66,6 +68,9 @@ pub(crate) struct ClassInfo {
     pub press: Press,
 
     pub id: Class,
+
+    // Whether allocations should be zero-filled.
+    pub zero_init: bool,
 }
 
 impl ClassConfig {
@@ -88,7 +93,11 @@ impl ClassConfig {
         };
 
         let layout = Layout::from_size_align(config.size.max(1), /*align=*/ 8).ok()?;
-        Some(ClassConfig { name, layout })
+        Some(ClassConfig {
+            name,
+            layout,
+            zero_init: config.zero_init,
+        })
     }
 }
 
@@ -128,14 +137,17 @@ impl Class {
             id: NonZeroU32::new(next_id as u32).expect("next_id is positive"),
         };
 
+        let layout = config.layout.pad_to_align();
+
         let info = Box::leak(Box::new(ClassInfo {
             name: config.name,
-            layout: config.layout,
+            layout,
             rack: crate::rack::get_default_rack(),
             full_mags: MagazineStack::new(),
             partial_mags: MagazineStack::new(),
-            press: Press::new(id, config.layout)?,
+            press: Press::new(id, layout)?,
             id,
+            zero_init: config.zero_init,
         }));
         classes.push(info);
         Ok(id)
@@ -199,6 +211,7 @@ mod test {
         let class = Class::new(ClassConfig {
             name: Some("alloc_smoke".into()),
             layout: Layout::from_size_align(8, 8).expect("layout should build"),
+            zero_init: true,
         })
         .expect("Class should build");
 
@@ -227,6 +240,7 @@ mod test {
             let class = Class::new(ClassConfig {
                 name: Some("random".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
+                zero_init: false,
             })
             .expect("Class should build");
 
@@ -283,11 +297,13 @@ mod test {
             let classes = vec![
                 Class::new(ClassConfig {
                     name: Some("random_class_1".into()),
-                    layout: Layout::from_size_align(8, 8).expect("layout should build")
+                    layout: Layout::from_size_align(8, 8).expect("layout should build"),
+                    zero_init: true,
                 }).expect("Class should build"),
                 Class::new(ClassConfig {
                     name: Some("random_class_2".into()),
-                    layout: Layout::from_size_align(16, 8).expect("layout should build")
+                    layout: Layout::from_size_align(16, 8).expect("layout should build"),
+                    zero_init: false,
                 }).expect("Class should build"),
             ];
 
@@ -299,12 +315,16 @@ mod test {
             slots.resize(20, None);
             for (index, class_id) in indices.iter().cloned() {
                 if let Some((alloc, class)) = slots[index].take() {
+                    unsafe { std::ptr::write_bytes(alloc.as_ptr() as *mut u8, 42, 1); }
                     class.release(alloc);
                 } else {
                     let class = classes[class_id];
                     let new_alloc = class.allocate();
 
                     prop_assert!(new_alloc.is_some());
+                    if class_id == 0 {
+                        prop_assert_eq!(unsafe { std::ptr::read(new_alloc.as_ref().unwrap().as_ptr() as *const u8) }, 0);
+                    }
 
                     let fresh = slots.iter().all(|x| {
                         match x {
@@ -333,6 +353,7 @@ mod test {
             let class = Class::new(ClassConfig {
                 name: Some("lifo".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
+                zero_init: true,
             })
             .expect("Class should build");
 
@@ -346,8 +367,11 @@ mod test {
                     let block = new_alloc.unwrap();
 
                     prop_assert!(check_new_allocation(&stack, block));
+                    prop_assert_eq!(unsafe { std::ptr::read(block.as_ptr() as *const u8) }, 0);
+
                     stack.push(block);
                 } else if let Some(freed) = stack.pop() {
+                    unsafe { std::ptr::write_bytes(freed.as_ptr() as *mut u8, 42, 1); }
                     class.release(freed);
                 }
             }
@@ -365,6 +389,7 @@ mod test {
             let class = Class::new(ClassConfig {
                 name: Some("lifo".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
+                zero_init: false,
             })
             .expect("Class should build");
 
@@ -399,6 +424,7 @@ mod test {
             let class = Class::new(ClassConfig {
                 name: Some("lifo".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
+                zero_init: true,
             })
             .expect("Class should build");
 
@@ -412,12 +438,15 @@ mod test {
                     let block = new_alloc.unwrap();
 
                     prop_assert!(check_new_allocation(queue.make_contiguous(), block));
+                    prop_assert_eq!(unsafe { std::ptr::read(block.as_ptr() as *const u8) }, 0);
                     queue.push_back(block);
                 } else if action == -1 {
                     if let Some(freed) = queue.pop_front() {
+                        unsafe { std::ptr::write_bytes(freed.as_ptr() as *mut u8, 42, 1); }
                         class.release(freed);
                     }
                 } else if let Some(freed) = queue.pop_back() {
+                    unsafe { std::ptr::write_bytes(freed.as_ptr() as *mut u8, 42, 1); }
                     class.release(freed);
                 }
             }

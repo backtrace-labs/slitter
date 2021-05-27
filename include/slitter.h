@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -27,6 +28,11 @@ struct slitter_class_config {
 	 * are only guaranteed alignment to 8 bytes.
 	 */
 	size_t size;
+
+	/*
+	 * If true, zero-fill recycled allocations.
+	 */
+	bool zero_init;
 };
 
 #define DEFINE_SLITTER_CLASS(NAME, ...)					\
