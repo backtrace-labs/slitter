@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-changed=c/cache.c");
+    println!("cargo:rerun-if-changed=c/cache.h");
     println!("cargo:rerun-if-changed=c/mag.c");
     println!("cargo:rerun-if-changed=c/mag.h");
     println!("cargo:rerun-if-changed=c/map.c");
@@ -13,6 +15,7 @@ fn main() {
     build.define("SLITTER__MAGAZINE_SIZE", "6");
 
     build
+        .file("c/cache.c")
         .file("c/mag.c")
         .file("c/map.c")
         .file("c/stack.c")

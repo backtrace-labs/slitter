@@ -71,6 +71,10 @@ struct Cache {
     per_class_info: SmallVec<[Option<&'static ClassInfo>; SMALL_CACHE_SIZE + 1]>,
 }
 
+extern "C" {
+    fn slitter__cache_register(region: *mut Magazines, count: usize);
+}
+
 // TODO: keyed thread-local is slow.  We should `#![feature(thread_local)]`
 // and `#[thread_local] static mut CACHE: ...` in nightly builds.  We'll
 // still want a `thread_local!` to trigger cleanup...
@@ -158,6 +162,10 @@ impl Drop for Cache {
     #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
     #[ensures(self.per_class_info.is_empty(), "The cache must be empty before dropping.")]
     fn drop(&mut self) {
+        unsafe {
+            slitter__cache_register(std::ptr::null_mut(), 0);
+        }
+
         while let Some(slot) = self.per_class_info.pop() {
             if let Some(info) = slot {
                 let mags = self.per_class.pop().expect("lengths must match");
@@ -242,6 +250,10 @@ impl Cache {
 
             self.per_class.push(Default::default());
             self.per_class_info.push(info);
+        }
+
+        unsafe {
+            slitter__cache_register(self.per_class.as_mut_ptr(), self.per_class.len());
         }
     }
 
