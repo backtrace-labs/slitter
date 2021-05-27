@@ -90,6 +90,25 @@ pub fn allocate(class: Class) -> Option<LinearRef> {
         .unwrap_or_else(|_| class.info().allocate_slow())
 }
 
+/// C-accessible slow path for the allocation.  The slow-path code is
+/// identical to regular non-C allocation, so it's always safe to call
+/// this function.
+#[ensures(ret.is_some() ->
+          debug_allocation_map::can_be_allocated(class, ret.as_ref().unwrap().get()).is_ok(),
+          "Successful allocations must be in the correct class and not double allocate")]
+#[ensures(ret.is_some() ->
+          debug_type_map::is_class(class, ret.as_ref().unwrap()).is_ok(),
+          "Successful allocations must match the class of the address range.")]
+#[ensures(ret.is_some() ->
+          press::check_allocation(class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+          "Sucessful allocations must have the allocation metadata set correctly.")]
+#[no_mangle]
+pub extern "C" fn slitter__allocate_slow(class: Class) -> Option<LinearRef> {
+    CACHE
+        .try_with(|cache| cache.borrow_mut().allocate_slow(class))
+        .unwrap_or_else(|_| class.info().allocate_slow())
+}
+
 /// Returns an allocation back to this `class`.
 #[requires(debug_allocation_map::has_been_released(class, block.get()).is_ok(),
            "Blocks passed to `release` must have already been marked as released.")]
@@ -103,6 +122,28 @@ pub fn release(class: Class, block: LinearRef) {
 
     CACHE
         .try_with(|cache| cache.borrow_mut().release(class, cell.take().unwrap()))
+        .unwrap_or_else(|_| {
+            if let Some(alloc) = cell {
+                class.info().release_slow(alloc)
+            }
+        })
+}
+
+/// C-accessible slow path for the allocation.  The slow-path code is
+/// identical to regular non-C release call, so it's always safe to
+/// call this function.
+#[requires(debug_allocation_map::has_been_released(class, block.get()).is_ok(),
+           "Blocks passed to `release` must have already been marked as released.")]
+#[requires(debug_type_map::is_class(class, &block).is_ok(),
+           "Deallocated blocks must match the class of the address range.")]
+#[requires(press::check_allocation(class, block.get().as_ptr() as usize).is_ok(),
+          "Deallocated block must have the allocation metadata set correctly.")]
+#[no_mangle]
+pub extern "C" fn slitter__release_slow(class: Class, block: LinearRef) {
+    let mut cell = Some(block);
+
+    CACHE
+        .try_with(|cache| cache.borrow_mut().release_slow(class, cell.take().unwrap()))
         .unwrap_or_else(|_| {
             if let Some(alloc) = cell {
                 class.info().release_slow(alloc)
@@ -201,9 +242,6 @@ impl Cache {
         }
     }
 
-    /// Attempts to return an allocation for `class`.  Consumes from
-    /// the cache if possible, and hits the Class(Info)'s slow path
-    /// otherwise.
     #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
     #[ensures(ret.is_some() ->
               debug_allocation_map::can_be_allocated(class, ret.as_ref().unwrap().get()).is_ok(),
@@ -214,7 +252,7 @@ impl Cache {
               press::check_allocation(class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(always)]
-    fn allocate(&mut self, class: Class) -> Option<LinearRef> {
+    fn allocate_slow(&mut self, class: Class) -> Option<LinearRef> {
         let index = class.id().get() as usize;
 
         if self.per_class.len() <= index {
@@ -232,9 +270,23 @@ impl Cache {
             .refill_magazine(&mut entry.allocation_mag)
     }
 
-    /// Marks `block`, an allocation for `class`, ready for reuse.
-    /// Pushes to the cache if possible, and hits the Class(Info)'s
-    /// slow path otherwise.
+    /// Attempts to return an allocation for `class`.  Consumes from
+    /// the cache if possible, and hits the Class(Info)'s slow path
+    /// otherwise.
+    #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
+    #[ensures(ret.is_some() ->
+              debug_allocation_map::can_be_allocated(class, ret.as_ref().unwrap().get()).is_ok(),
+              "Successful allocations must be from the correct class, and not double allocate.")]
+    #[ensures(ret.is_some() -> debug_type_map::is_class(class, ret.as_ref().unwrap()).is_ok(),
+              "Successful allocations must match the class of the address range.")]
+    #[ensures(ret.is_some() ->
+              press::check_allocation(class, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
+              "Sucessful allocations must have the allocation metadata set correctly.")]
+    #[inline(always)]
+    fn allocate(&mut self, class: Class) -> Option<LinearRef> {
+        self.allocate_slow(class)
+    }
+
     #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
     #[requires(debug_allocation_map::has_been_released(class, block.get()).is_ok(),
                "A released block for `class` must have been marked as such.")]
@@ -243,7 +295,7 @@ impl Cache {
     #[requires(press::check_allocation(class, block.get().as_ptr() as usize).is_ok(),
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(always)]
-    fn release(&mut self, class: Class, block: LinearRef) {
+    fn release_slow(&mut self, class: Class, block: LinearRef) {
         let index = class.id().get() as usize;
 
         if self.per_class.len() <= index {
@@ -260,5 +312,20 @@ impl Cache {
                 .expect("must have class info")
                 .clear_magazine(&mut entry.release_mag, spill);
         }
+    }
+
+    /// Marks `block`, an allocation for `class`, ready for reuse.
+    /// Pushes to the cache if possible, and hits the Class(Info)'s
+    /// slow path otherwise.
+    #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
+    #[requires(debug_allocation_map::has_been_released(class, block.get()).is_ok(),
+               "A released block for `class` must have been marked as such.")]
+    #[requires(debug_type_map::is_class(class, &block).is_ok(),
+               "Deallocated blocks must match the class of the address range.")]
+    #[requires(press::check_allocation(class, block.get().as_ptr() as usize).is_ok(),
+               "Deallocated block must have the allocation metadata set correctly.")]
+    #[inline(always)]
+    fn release(&mut self, class: Class, block: LinearRef) {
+        self.release_slow(class, block)
     }
 }
