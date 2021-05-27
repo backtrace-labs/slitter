@@ -298,7 +298,20 @@ impl Cache {
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(always)]
     fn allocate(&mut self, class: Class) -> Option<LinearRef> {
-        self.allocate_slow(class)
+        #[cfg(features = "c_fast_path")]
+        const C_FAST_PATH: bool = true;
+        #[cfg(not(features = "c_fast_path"))]
+        const C_FAST_PATH: bool = false;
+
+        if C_FAST_PATH {
+            extern "C" {
+                fn slitter_allocate(class: Class) -> Option<LinearRef>;
+            }
+
+            unsafe { slitter_allocate(class) }
+        } else {
+            self.allocate_slow(class)
+        }
     }
 
     #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
@@ -339,6 +352,19 @@ impl Cache {
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(always)]
     fn release(&mut self, class: Class, block: LinearRef) {
-        self.release_slow(class, block)
+        #[cfg(features = "c_fast_path")]
+        const C_FAST_PATH: bool = true;
+        #[cfg(not(features = "c_fast_path"))]
+        const C_FAST_PATH: bool = false;
+
+        if C_FAST_PATH {
+            extern "C" {
+                fn slitter_release(class: Class, block: LinearRef);
+            }
+
+            unsafe { slitter_release(class, block) }
+        } else {
+            self.release_slow(class, block)
+        }
     }
 }

@@ -26,9 +26,6 @@ mod debug_arange_map;
 ))]
 mod debug_type_map;
 
-use std::ffi::c_void;
-use std::ptr::NonNull;
-
 pub use class::Class;
 pub use class::ClassConfig;
 pub use class::ForeignClassConfig;
@@ -45,14 +42,7 @@ pub unsafe extern "C" fn slitter_class_register(config_ptr: *const ForeignClassC
     Class::new(config).expect("slitter class allocation should succeed")
 }
 
-#[no_mangle]
-pub extern "C" fn slitter_allocate(class: Class) -> *mut c_void {
-    class.allocate().expect("Allocation must succeed").as_ptr()
-}
-
-#[no_mangle]
-pub extern "C" fn slitter_release(class: Class, ptr: *mut c_void) {
-    if let Some(block) = NonNull::new(ptr) {
-        class.release(block);
-    }
-}
+// TODO: we would like to re-export `slitter_allocate` and
+// `slitter_release`, but cargo won't let us do that.  We
+// can however generate a static archive, which will let
+// the caller grab the C-side definition as needed.

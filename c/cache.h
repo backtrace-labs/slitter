@@ -1,4 +1,5 @@
 #pragma once
+#include "slitter.h"
 
 #include <stddef.h>
 

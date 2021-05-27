@@ -12,7 +12,13 @@ fn main() {
         build.file(format!("c/{}.c", file));
     }
 
+    // This forces a cdylib to include the routines, but does not
+    // export the symbols...
+    println!("cargo:rustc-cdylib-link-arg=-uslitter_allocate");
+    println!("cargo:rustc-cdylib-link-arg=-uslitter_release");
+
     build
+        .include("include")
         .opt_level(2)
         .flag_if_supported("-mcx16") // enable CMPXCHB16B
         .flag("-W")
