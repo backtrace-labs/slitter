@@ -24,12 +24,16 @@ use crate::debug_allocation_map;
     feature = "check_contracts"
 ))]
 use crate::debug_type_map;
+#[cfg(any(
+    all(test, feature = "check_contracts_in_tests"),
+    feature = "check_contracts"
+))]
+use crate::press;
 
 use crate::cache;
 use crate::class::Class;
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
-use crate::press;
 
 impl Class {
     /// Attempts to return a newly allocated object for this `Class`.
@@ -52,8 +56,6 @@ impl Class {
                "Released blocks come from an address of the correct class.")]
     #[inline(always)]
     pub fn release(self, block: NonNull<c_void>) {
-        press::check_allocation(self, block.as_ptr() as usize)
-            .expect("deallocated address should match allocation class");
         cache::release(self, LinearRef::new(block));
     }
 }

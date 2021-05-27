@@ -25,16 +25,12 @@ use crate::debug_allocation_map;
     feature = "check_contracts"
 ))]
 use crate::debug_type_map;
-#[cfg(any(
-    all(test, feature = "check_contracts_in_tests"),
-    feature = "check_contracts"
-))]
-use crate::press;
 
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
 use crate::magazine::PopMagazine;
 use crate::magazine::PushMagazine;
+use crate::press;
 use crate::Class;
 
 /// Inline the cache array for up to this many allocation classes.
@@ -323,6 +319,9 @@ impl Cache {
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(always)]
     fn release_slow(&mut self, class: Class, block: LinearRef) {
+        press::check_allocation(class, block.get().as_ptr() as usize)
+            .expect("deallocated address should match allocation class");
+
         let index = class.id().get() as usize;
 
         if self.per_class.len() <= index {

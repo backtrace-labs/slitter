@@ -61,9 +61,8 @@ impl LinearRef {
         Self::new(NonNull::new(address as *mut c_void).expect("should not be zero"))
     }
 
-    /// Only used for test and contracts: returns a reference to the
+    /// Only used for safety checks: returns a reference to the
     /// underlying `NonNull`.
-    #[cfg(any(test, feature = "check_contracts"))]
     pub(crate) fn get(&self) -> &NonNull<c_void> {
         &self.inner
     }
