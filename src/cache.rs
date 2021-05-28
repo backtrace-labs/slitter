@@ -64,7 +64,7 @@ struct Cache {
     /// This parallel vector holds a reference to ClassInfo; it is
     /// only `None` for the dummy entry we keep around for the invalid
     /// "0" class id.
-    per_class_info: SmallVec<[Option<&'static ClassInfo>; SMALL_CACHE_SIZE + 1]>,
+    per_class_info: Vec<Option<&'static ClassInfo>>,
 }
 
 extern "C" {
@@ -187,7 +187,7 @@ impl Cache {
     fn new() -> Cache {
         Cache {
             per_class: SmallVec::new(),
-            per_class_info: SmallVec::new(),
+            per_class_info: Vec::new(),
         }
     }
 
