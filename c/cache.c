@@ -10,7 +10,14 @@ struct thread_cache {
 	struct cache_magazines *mags;
 };
 
-static __thread struct thread_cache slitter_cache __attribute__((tls_model("initial-exec")));
+struct thread_allocation {
+        struct thread_cache cache;
+        /* Add one more for the dummy class (and to avoid zero-sized arrays). */
+        struct cache_magazines preallocated[1 + SLITTER__CACHE_PREALLOC];
+};
+
+static __thread struct thread_allocation slitter_cache
+    __attribute__((tls_model("initial-exec")));
 
 /**
  * Defined in cache.rs
@@ -18,10 +25,19 @@ static __thread struct thread_cache slitter_cache __attribute__((tls_model("init
 extern void *slitter__allocate_slow(struct slitter_class);
 extern void slitter__release_slow(struct slitter_class, void *);
 
+struct cache_magazines *
+slitter__cache_borrow(size_t *OUT_n)
+{
+
+        *OUT_n = sizeof(slitter_cache.preallocated)
+            / sizeof(slitter_cache.preallocated[0]);
+        return slitter_cache.preallocated;
+}
+
 void
 slitter__cache_register(struct cache_magazines *mags, size_t n)
 {
-	slitter_cache = (struct thread_cache) {
+	slitter_cache.cache = (struct thread_cache) {
 		.n = n,
 		.mags = mags,
 	};
@@ -36,10 +52,10 @@ slitter_allocate(struct slitter_class class)
 	size_t next_index;
 	uint32_t id = class.id;
 
-	if (__builtin_expect(id >= slitter_cache.n, 0))
+	if (__builtin_expect(id >= slitter_cache.cache.n, 0))
 		return slitter__allocate_slow(class);
 
-	mag = &slitter_cache.mags[id].alloc;
+	mag = &slitter_cache.cache.mags[id].alloc;
 	if (__builtin_usubl_overflow(mag->top_of_stack, 2, &next_index)) {
 		next_index++;
 	}
@@ -78,10 +94,10 @@ slitter_release(struct slitter_class class, void *ptr)
 		assert(class.id == span->class_id && "class mismatch");
 	}
 
-	if (__builtin_expect(id >= slitter_cache.n, 0))
+	if (__builtin_expect(id >= slitter_cache.cache.n, 0))
 		return slitter__release_slow(class, ptr);
 
-	mag = &slitter_cache.mags[id].release;
+	mag = &slitter_cache.cache.mags[id].release;
 	if (__builtin_expect(slitter__magazine_is_exhausted(mag), 0))
 		return slitter__release_slow(class, ptr);
 
