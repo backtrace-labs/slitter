@@ -15,7 +15,6 @@ test_only_small_constants = []  # Shrink constants to cover more conditions.
 contracts = { version = "0.6", optional = true }
 disabled_contracts = "0.1"
 lazy_static = "1"
-smallvec = "1"
 static_assertions = "1.1"
 
 [build-dependencies]

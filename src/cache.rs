@@ -11,7 +11,6 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
-use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::num::NonZeroU32;
 
@@ -33,8 +32,9 @@ use crate::magazine::PushMagazine;
 use crate::press;
 use crate::Class;
 
-/// Inline the cache array for up to this many allocation classes.
-const SMALL_CACHE_SIZE: usize = 3;
+/// Start with a fast path array of this many `Magazines`
+/// structs, including one for the dummy 0 class.
+const INITIAL_CACHE_SIZE: usize = 4;
 
 #[derive(Default)]
 #[repr(C)]
@@ -67,7 +67,7 @@ struct Cache {
     /// This array of magazines may be longer than necessary:
     /// zero-initialised magazines will correctly trigger a
     /// slow path.
-    per_class: SmallVec<[Magazines; SMALL_CACHE_SIZE + 1]>,
+    per_class: Box<[Magazines]>,
     /// This parallel vector holds a reference to ClassInfo; it is
     /// only `None` for the dummy entry we keep around for the invalid
     /// "0" class id.
@@ -200,8 +200,10 @@ impl Drop for Cache {
 
 impl Cache {
     fn new() -> Cache {
+        let mags: [Magazines; INITIAL_CACHE_SIZE] = Default::default();
+
         Cache {
-            per_class: SmallVec::new(),
+            per_class: Box::new(mags),
             per_class_info: Vec::new(),
         }
     }
@@ -266,12 +268,17 @@ impl Cache {
             return;
         }
 
-        self.per_class.resize_with(
-            min_length
-                .checked_next_power_of_two()
-                .expect("&CacheInfo are too big for len > usize::MAX / 2"),
-            Default::default,
-        );
+        let new_length = min_length
+            .checked_next_power_of_two()
+            .expect("&CacheInfo are too big for len > usize::MAX / 2");
+        let mut vec = Vec::with_capacity(new_length);
+        vec.resize_with(new_length, Default::default);
+
+        let mut new_slice = vec.into_boxed_slice();
+        self.per_class
+            .swap_with_slice(&mut new_slice[0..self.per_class.len()]);
+
+        std::mem::swap(&mut new_slice, &mut self.per_class);
     }
 
     /// Ensures the cache's `per_class_info` array has one entry for every
