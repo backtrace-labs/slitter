@@ -34,6 +34,7 @@ use crate::Class;
 
 /// Start with a fast path array of this many `Magazines`
 /// structs, including one for the dummy 0 class.
+#[cfg(not(feature = "c_fast_path"))]
 const INITIAL_CACHE_SIZE: usize = 4;
 
 #[derive(Default)]
@@ -218,12 +219,29 @@ impl Drop for Cache {
 
 impl Cache {
     fn new() -> Cache {
-        let mags: [Magazines; INITIAL_CACHE_SIZE] = Default::default();
+        #[cfg(feature = "c_fast_path")]
+        let (mags, is_owned) = {
+            extern "C" {
+                fn slitter__cache_borrow(OUT_n: &mut usize) -> *mut Magazines;
+            }
+
+            let mut slice_size = 0usize;
+            let mags = unsafe { slitter__cache_borrow(&mut slice_size) };
+            let slice = unsafe { std::slice::from_raw_parts_mut(mags, slice_size) };
+            (slice, false)
+        };
+
+        #[cfg(not(feature = "c_fast_path"))]
+        let (mags, is_owned) = {
+            let mags = [Magazines; INITIAL_CACHE_SIZE] = Default::default();
+
+            (Box::leak(Box::new(mags)), true)
+        };
 
         Cache {
-            per_class: Box::leak(Box::new(mags)),
+            per_class: mags,
             per_class_info: Vec::new(),
-            per_class_is_owned: true,
+            per_class_is_owned: is_owned,
         }
     }
 
