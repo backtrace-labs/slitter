@@ -67,7 +67,7 @@ struct Cache {
     /// This array of magazines may be longer than necessary:
     /// zero-initialised magazines will correctly trigger a
     /// slow path.
-    per_class: Box<[Magazines]>,
+    per_class: &'static mut [Magazines],
     /// This parallel vector holds a reference to ClassInfo; it is
     /// only `None` for the dummy entry we keep around for the invalid
     /// "0" class id.
@@ -195,6 +195,13 @@ impl Drop for Cache {
                 default_rack.release_empty_magazine(mags.release);
             }
         }
+
+        // Replace the magazine slice with a dummy, and drop it.
+        // An empty slice is correct: `per_class_info.len() == 0`.
+        let mut dummy: &mut [Magazines] = &mut [];
+
+        std::mem::swap(&mut dummy, &mut self.per_class);
+        unsafe { Box::from_raw(dummy) };
     }
 }
 
@@ -203,7 +210,7 @@ impl Cache {
         let mags: [Magazines; INITIAL_CACHE_SIZE] = Default::default();
 
         Cache {
-            per_class: Box::new(mags),
+            per_class: Box::leak(Box::new(mags)),
             per_class_info: Vec::new(),
         }
     }
@@ -274,11 +281,12 @@ impl Cache {
         let mut vec = Vec::with_capacity(new_length);
         vec.resize_with(new_length, Default::default);
 
-        let mut new_slice = vec.into_boxed_slice();
+        let mut new_slice = Box::leak(vec.into_boxed_slice());
         self.per_class
             .swap_with_slice(&mut new_slice[0..self.per_class.len()]);
 
         std::mem::swap(&mut new_slice, &mut self.per_class);
+        unsafe { Box::from_raw(new_slice) };
     }
 
     /// Ensures the cache's `per_class_info` array has one entry for every
