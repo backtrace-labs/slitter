@@ -255,10 +255,29 @@ impl Cache {
         Ok(())
     }
 
-    /// Ensures the cache's `per_class` array has one entry for every
+    /// Ensure the cache's `per_class` array has at least `min_length`
+    /// elements.
+    #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
+    #[requires(min_length < usize::MAX / 2)]
+    #[ensures(self.per_class.len() >= min_length)]
+    #[ensures(self.per_class.len() >= old(self.per_class.len()))]
+    fn ensure_per_class_length(&mut self, min_length: usize) {
+        if self.per_class.len() >= min_length {
+            return;
+        }
+
+        self.per_class.resize_with(
+            min_length
+                .checked_next_power_of_two()
+                .expect("&CacheInfo are too big for len > usize::MAX / 2"),
+            Default::default,
+        );
+    }
+
+    /// Ensures the cache's `per_class_info` array has one entry for every
     /// allocation class currently defined.
     #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
-    #[ensures(self.per_class.len() > old(crate::class::max_id()),
+    #[ensures(self.per_class_info.len() > old(crate::class::max_id()),
               "There exists an entry for the max class id when the function was called.")]
     #[cold]
     fn grow(&mut self) {
@@ -268,15 +287,23 @@ impl Cache {
         }
 
         assert!(max_id <= u32::MAX as usize);
+        self.ensure_per_class_length(max_id + 1);
+
         while self.per_class_info.len() <= max_id {
             let id = NonZeroU32::new(self.per_class_info.len() as u32);
             let info = id.and_then(|id| Class::from_id(id).map(|class| class.info()));
 
-            self.per_class.push(Default::default());
             self.per_class_info.push(info);
         }
 
         unsafe {
+            // We want to pass `per_class.len()`, despite it being
+            // longer than `per_class_info`: the extra elements will
+            // correctly trigger a slow path, so this is safe, and we
+            // want to concentrate all slow path conditionals to the
+            // same branch, for predictability.  We can't get rid of
+            // the "magazine is exhausted" condition, so let's make
+            // the "array is too short" branch as unlikely as possible.
             slitter__cache_register(self.per_class.as_mut_ptr(), self.per_class.len());
         }
     }
