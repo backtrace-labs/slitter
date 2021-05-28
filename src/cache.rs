@@ -72,6 +72,11 @@ struct Cache {
     /// only `None` for the dummy entry we keep around for the invalid
     /// "0" class id.
     per_class_info: Vec<Option<&'static ClassInfo>>,
+    /// If true, the `Cache` owns allocation backing the `per_class`
+    /// slice.  Otherwise, we should let it leak.
+    ///
+    /// Once true, this never becomes false.
+    per_class_is_owned: bool,
 }
 
 extern "C" {
@@ -196,12 +201,18 @@ impl Drop for Cache {
             }
         }
 
-        // Replace the magazine slice with a dummy, and drop it.
-        // An empty slice is correct: `per_class_info.len() == 0`.
-        let mut dummy: &mut [Magazines] = &mut [];
+        if self.per_class_is_owned {
+            // Replace the magazine slice with a dummy, and drop it.
+            // An empty slice is correct: `per_class_info.len() == 0`.
+            let mut dummy: &mut [Magazines] = &mut [];
 
-        std::mem::swap(&mut dummy, &mut self.per_class);
-        unsafe { Box::from_raw(dummy) };
+            std::mem::swap(&mut dummy, &mut self.per_class);
+            unsafe { Box::from_raw(dummy) };
+        }
+
+        // If we don't own the `per_class` slice, it's safe to leave
+        // it here: it has been fully reset to default `Magazines`
+        // that do not own anything.
     }
 }
 
@@ -212,6 +223,7 @@ impl Cache {
         Cache {
             per_class: Box::leak(Box::new(mags)),
             per_class_info: Vec::new(),
+            per_class_is_owned: true,
         }
     }
 
@@ -270,6 +282,8 @@ impl Cache {
     #[requires(min_length < usize::MAX / 2)]
     #[ensures(self.per_class.len() >= min_length)]
     #[ensures(self.per_class.len() >= old(self.per_class.len()))]
+    #[ensures(old(self.per_class_is_owned) -> self.per_class_is_owned,
+              "per_class_is_owned flag is monotonic (false -> true)")]
     fn ensure_per_class_length(&mut self, min_length: usize) {
         if self.per_class.len() >= min_length {
             return;
@@ -285,8 +299,17 @@ impl Cache {
         self.per_class
             .swap_with_slice(&mut new_slice[0..self.per_class.len()]);
 
+        let mut is_owned = true;
         std::mem::swap(&mut new_slice, &mut self.per_class);
-        unsafe { Box::from_raw(new_slice) };
+        // Swap the `is_owned` flag after the slice: the flag only
+        // goes from false to true, never the other way, and it's
+        // safer to leak on unwind/panic than to free something
+        // we don't own.
+        std::mem::swap(&mut is_owned, &mut self.per_class_is_owned);
+
+        if is_owned {
+            unsafe { Box::from_raw(new_slice) };
+        }
     }
 
     /// Ensures the cache's `per_class_info` array has one entry for every
