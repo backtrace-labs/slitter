@@ -59,7 +59,14 @@ struct Magazines {
 /// The cache consists of parallel vectors that are directly indexed
 /// with the class id; the first element at index 0 is thus never
 /// used, so we must increment SMALL_CACHE_SIZE by 1.
+///
+/// The source of truth on the number of allocation classes in the
+/// Cache is the `per_class_info` vector; `per_class` may have extra
+/// element but is never shorter than the `per_class_info`.
 struct Cache {
+    /// This array of magazines may be longer than necessary:
+    /// zero-initialised magazines will correctly trigger a
+    /// slow path.
     per_class: SmallVec<[Magazines; SMALL_CACHE_SIZE + 1]>,
     /// This parallel vector holds a reference to ClassInfo; it is
     /// only `None` for the dummy entry we keep around for the invalid
@@ -166,8 +173,17 @@ impl Drop for Cache {
         }
 
         while let Some(slot) = self.per_class_info.pop() {
+            let index = self.per_class_info.len();
+            let mut mags = Default::default();
+
+            std::mem::swap(
+                &mut mags,
+                self.per_class
+                    .get_mut(index)
+                    .expect("per_class should be at least as long as per_class_info"),
+            );
+
             if let Some(info) = slot {
-                let mags = self.per_class.pop().expect("lengths must match");
                 info.release_magazine(mags.alloc);
                 info.release_magazine(mags.release);
             } else {
@@ -175,7 +191,6 @@ impl Drop for Cache {
                 assert!(self.per_class_info.is_empty());
 
                 let default_rack = crate::rack::get_default_rack();
-                let mags = self.per_class.pop().expect("lengths must match");
                 default_rack.release_empty_magazine(mags.alloc);
                 default_rack.release_empty_magazine(mags.release);
             }
@@ -197,8 +212,18 @@ impl Cache {
         feature = "check_contracts"
     ))]
     fn check_rep_or_err(&self) -> Result<(), &'static str> {
-        if self.per_class.len() != self.per_class_info.len() {
-            return Err("Vectors of magazines and info have different lengths.");
+        if self.per_class.len() < self.per_class_info.len() {
+            return Err("Vector of magazines is shorter than vector of info.");
+        }
+
+        for mags in self.per_class.iter().skip(self.per_class_info.len()) {
+            if !mags.alloc.is_empty() {
+                return Err("Padding cache entry has a non-empty allocation magazine.");
+            }
+
+            if !mags.release.is_full() {
+                return Err("Padding cache entry has a non-full release magazine.");
+            }
         }
 
         if !self
@@ -238,13 +263,13 @@ impl Cache {
     #[cold]
     fn grow(&mut self) {
         let max_id = crate::class::max_id();
-        if self.per_class.len() > max_id {
+        if self.per_class_info.len() > max_id {
             return;
         }
 
         assert!(max_id <= u32::MAX as usize);
-        while self.per_class.len() <= max_id {
-            let id = NonZeroU32::new(self.per_class.len() as u32);
+        while self.per_class_info.len() <= max_id {
+            let id = NonZeroU32::new(self.per_class_info.len() as u32);
             let info = id.and_then(|id| Class::from_id(id).map(|class| class.info()));
 
             self.per_class.push(Default::default());
@@ -269,10 +294,11 @@ impl Cache {
     fn allocate_slow(&mut self, class: Class) -> Option<LinearRef> {
         let index = class.id().get() as usize;
 
-        if self.per_class.len() <= index {
+        if self.per_class_info.len() <= index {
             self.grow();
         }
 
+        // per_class.len() >= per_class_info.len()
         let mag = &mut self.per_class[index].alloc;
         if let Some(alloc) = mag.get() {
             return Some(alloc);
@@ -327,11 +353,12 @@ impl Cache {
 
         let index = class.id().get() as usize;
 
-        if self.per_class.len() <= index {
+        if self.per_class_info.len() <= index {
             assert!(index < u32::MAX as usize);
             self.grow();
         }
 
+        // per_class.len() >= per_class_info.len()
         let mag = &mut self.per_class[index].release;
         // We prefer to cache freshly deallocated objects, for
         // temporal locality.
