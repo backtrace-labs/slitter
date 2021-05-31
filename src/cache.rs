@@ -27,6 +27,7 @@ use crate::debug_type_map;
 
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
+use crate::magazine::LocalMagazineCache;
 use crate::magazine::PopMagazine;
 use crate::magazine::PushMagazine;
 use crate::press;
@@ -49,6 +50,7 @@ struct Magazines {
 struct Info {
     /// The class info for the corresponding class id.
     info: Option<&'static ClassInfo>,
+    cache: LocalMagazineCache,
 }
 
 /// For each allocation class, we cache up to one magazine's worth of
@@ -184,6 +186,8 @@ impl Drop for Cache {
         }
 
         while let Some(slot) = self.per_class_info.pop() {
+            use LocalMagazineCache::*;
+
             let index = self.per_class_info.len();
             let mut mags = Default::default();
 
@@ -197,6 +201,11 @@ impl Drop for Cache {
             if let Some(info) = slot.info {
                 info.release_magazine(mags.alloc);
                 info.release_magazine(mags.release);
+                match slot.cache {
+                    Nothing => (),
+                    Empty(mag) => info.release_magazine(mag),
+                    Full(mag) => info.release_magazine(mag),
+                }
             } else {
                 // This must be the padding slot at index 0.
                 assert!(self.per_class_info.is_empty());
@@ -204,6 +213,12 @@ impl Drop for Cache {
                 let default_rack = crate::rack::get_default_rack();
                 default_rack.release_empty_magazine(mags.alloc);
                 default_rack.release_empty_magazine(mags.release);
+
+                match slot.cache {
+                    Nothing => (),
+                    Empty(_) => panic!("Found used cache in dummy slot"),
+                    Full(_) => panic!("Found used cache in dummy slot"),
+                }
             }
         }
 
@@ -354,7 +369,10 @@ impl Cache {
             let id = NonZeroU32::new(self.per_class_info.len() as u32);
             let info = id.and_then(|id| Class::from_id(id).map(|class| class.info()));
 
-            self.per_class_info.push(Info { info });
+            self.per_class_info.push(Info {
+                info,
+                cache: LocalMagazineCache::Nothing,
+            });
         }
 
         unsafe {
