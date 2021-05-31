@@ -226,6 +226,71 @@ mod test {
         class.release(p1);
     }
 
+    // Keep allocating / deallocating from the same class.  This
+    // should help us trigger magazine refilling logic.
+    #[test]
+    fn back_to_back() {
+        let class = Class::new(ClassConfig {
+            name: Some("alloc_push_pop".into()),
+            layout: Layout::from_size_align(8, 8).expect("layout should build"),
+            zero_init: true,
+        })
+        .expect("Class should build");
+
+        let size = 8;
+
+        for _ in 0..100 {
+            let allocated = class.allocate().expect("Should allocate");
+
+            let ptr = allocated.as_ptr() as *mut u8;
+            // Fresh allocations should always be zero-filled.
+            assert_eq!(unsafe { std::ptr::read(ptr) }, 0);
+            assert_eq!(unsafe { std::ptr::read(ptr.add(size - 1)) }, 0);
+
+            // Let's now write to our allocation before releasing.
+            unsafe { std::ptr::write(ptr, 42u8) };
+            unsafe { std::ptr::write(ptr.add(size - 1), 42u8) };
+
+            class.release(allocated);
+        }
+    }
+
+    // Allocate and deallocate from the same class, in batches.
+    #[test]
+    fn n_back_to_back() {
+        let class = Class::new(ClassConfig {
+            name: Some("alloc_push_pop".into()),
+            layout: Layout::from_size_align(8, 8).expect("layout should build"),
+            zero_init: true,
+        })
+        .expect("Class should build");
+
+        let size = 8;
+
+        for count in 1..128 {
+            let mut allocations = Vec::new();
+
+            for _ in 0..count {
+                let allocated = class.allocate().expect("Should allocate");
+
+                let ptr = allocated.as_ptr() as *mut u8;
+                // Fresh allocations should always be zero-filled.
+                assert_eq!(unsafe { std::ptr::read(ptr) }, 0);
+                assert_eq!(unsafe { std::ptr::read(ptr.add(size - 1)) }, 0);
+
+                // Let's now write to our allocation before releasing.
+                unsafe { std::ptr::write(ptr, 42u8) };
+                unsafe { std::ptr::write(ptr.add(size - 1), 42u8) };
+
+                allocations.push(allocated);
+            }
+
+            for allocation in allocations {
+                class.release(allocation);
+            }
+        }
+    }
+
     // Returns true iff that `new` isn't in `current`.
     fn check_new_allocation(current: &[NonNull<c_void>], new: NonNull<c_void>) -> bool {
         current.iter().all(|x| x.as_ptr() != new.as_ptr())
