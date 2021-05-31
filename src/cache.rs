@@ -42,8 +42,13 @@ const INITIAL_CACHE_SIZE: usize = 4;
 struct Magazines {
     /// The cache allocates from this magazine.
     alloc: PopMagazine,
-    /// The cache releases into theis magazine.
+    /// The cache releases into this magazine.
     release: PushMagazine,
+}
+
+struct Info {
+    /// The class info for the corresponding class id.
+    info: Option<&'static ClassInfo>,
 }
 
 /// For each allocation class, we cache up to one magazine's worth of
@@ -72,7 +77,7 @@ struct Cache {
     /// This parallel vector holds a reference to ClassInfo; it is
     /// only `None` for the dummy entry we keep around for the invalid
     /// "0" class id.
-    per_class_info: Vec<Option<&'static ClassInfo>>,
+    per_class_info: Vec<Info>,
     /// If true, the `Cache` owns allocation backing the `per_class`
     /// slice.  Otherwise, we should let it leak.
     ///
@@ -189,7 +194,7 @@ impl Drop for Cache {
                     .expect("per_class should be at least as long as per_class_info"),
             );
 
-            if let Some(info) = slot {
+            if let Some(info) = slot.info {
                 info.release_magazine(mags.alloc);
                 info.release_magazine(mags.release);
             } else {
@@ -269,7 +274,7 @@ impl Cache {
             .per_class_info
             .iter()
             .enumerate()
-            .all(|(i, x)| i == 0 || x.unwrap().id.id().get() as usize == i)
+            .all(|(i, x)| i == 0 || x.info.unwrap().id.id().get() as usize == i)
         {
             return Err("Some cache entries are missing their info.");
         }
@@ -287,8 +292,8 @@ impl Cache {
         // All magazines must be in a good state, and only contain
         // *available* allocations for the correct class.
         for (mags, info) in self.per_class.iter().zip(&self.per_class_info) {
-            mags.alloc.check_rep(info.map(|info| info.id))?;
-            mags.release.check_rep(info.map(|info| info.id))?;
+            mags.alloc.check_rep(info.info.map(|info| info.id))?;
+            mags.release.check_rep(info.info.map(|info| info.id))?;
         }
 
         Ok(())
@@ -349,7 +354,7 @@ impl Cache {
             let id = NonZeroU32::new(self.per_class_info.len() as u32);
             let info = id.and_then(|id| Class::from_id(id).map(|class| class.info()));
 
-            self.per_class_info.push(info);
+            self.per_class_info.push(Info { info });
         }
 
         unsafe {
@@ -388,6 +393,7 @@ impl Cache {
         }
 
         self.per_class_info[index]
+            .info
             .expect("must have class info")
             .refill_magazine(mag)
     }
@@ -447,6 +453,7 @@ impl Cache {
         // temporal locality.
         if let Some(spill) = mag.put(block) {
             self.per_class_info[index]
+                .info
                 .expect("must have class info")
                 .clear_magazine(mag, spill);
         }
