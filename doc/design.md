@@ -75,9 +75,12 @@ The allocation flow, from the outside in
 
 The allocation fast path for a class id `C` finds the `C`th entry in
 the thread-local cache, and looks at the magazine stored there.
-Slitter currently only has one magazine per cache: our target
-application performs bursts of allocations and bursts of deallocation,
-so thrashing isn't an issue.
+Slitter currently only has one allocation magazine and one
+deallocation magazine per cache, as well as a "buffer": our target
+application mostly performs bursts of allocations and bursts of
+deallocation, so locality of repeated allocations and deallocations
+isn't a concern... at least not as much as checking deallocations in
+the slow path.
 
 If that magazine still has some allocations, we pop off one
 allocation, and return that to the caller.

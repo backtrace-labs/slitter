@@ -74,13 +74,14 @@ dependency chain, and code that allocates memory typically doesn't
 saturate execution units, so that's not a problem.
 
 When we must refill the magazine, the slow path isn't that slow
-either.  At a high level, we first check if we can pop some non-empty
-magazines off the allocation class's linked stack.  If both stacks are
-empty, that's just a quick load and comparison with 0.  Otherwise, we
-call `slitter__stack_pop` or `slitter__stack_try_pop`, straightforward
-double-wide CAS jobs (we avoid ABA with a generation counter, and
-don't have to worry about reclamation races because magazines are
-immortal).  The plain `pop` looks like:
+either.  At a high level, we first check if there's a full magazine in
+the thread cache's deallocation buffer; if there isn't, we try to pop
+some non-empty magazines off the allocation class's linked stack.  When
+both stacks are empty, that's just a quick load and comparison with 0.
+Otherwise, we call `slitter__stack_pop` or `slitter__stack_try_pop`,
+straightforward double-wide CAS jobs (we avoid ABA with a generation
+counter, and don't have to worry about reclamation races because
+magazines are immortal).  The plain `pop` looks like:
 
 ```
    0:   4c 8b 4f 08             mov    0x8(%rdi),%r9
@@ -117,10 +118,11 @@ immortal).  The plain `pop` looks like:
 If we found a non-empty magazine, we must push our currenty empty one
 to a freelist for recycling.  That's another compare-and-swap.
 
-If both stacks are empty, we must allocate more objects.  We implement
-that in `press.rs` with a single atomic increment, which does not fail
-under contention, but only when we notice (after the fact) that we
-must find a new bump allocation region.
+If the local buffer and both class-global stacks are empty, we must
+allocate more objects.  We implement that in `press.rs` with a single
+atomic increment, which does not fail under contention, but only when
+we notice (after the fact) that we must find a new bump allocation
+region.
 
 At a high level, we expect the slow path to incur one atomic increment
 during bulk allocation phases, when no allocation is cached in
