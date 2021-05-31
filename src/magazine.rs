@@ -55,6 +55,56 @@ pub struct Magazine<const PUSH_MAG: bool>(pub(crate) MagazineImpl<PUSH_MAG>);
 pub type PushMagazine = Magazine<true>;
 pub type PopMagazine = Magazine<false>;
 
+pub enum LocalMagazineCache {
+    Nothing,
+    Empty(PopMagazine),
+    Full(PushMagazine),
+}
+
+impl LocalMagazineCache {
+    /// Returns a full `PopMagazine` if one is cached.
+    pub fn steal_full(&mut self) -> Option<PopMagazine> {
+        use LocalMagazineCache::*;
+        match self {
+            Nothing => None,
+            Empty(_) => None,
+            Full(_) => {
+                let mut private = LocalMagazineCache::Nothing;
+
+                std::mem::swap(&mut private, self);
+                let storage = if let Full(mag) = private {
+                    mag.0.storage()?
+                } else {
+                    panic!("std::mem::swap changed enum");
+                };
+
+                Some(Magazine(MagazineImpl::new(Some(storage))))
+            }
+        }
+    }
+
+    /// Returns an empty `PushMagazine` if one is cached.
+    pub fn steal_empty(&mut self) -> Option<PushMagazine> {
+        use LocalMagazineCache::*;
+        match self {
+            Nothing => None,
+            Full(_) => None,
+            Empty(_) => {
+                let mut private = LocalMagazineCache::Nothing;
+
+                std::mem::swap(&mut private, self);
+                let storage = if let Empty(mag) = private {
+                    mag.0.storage()?
+                } else {
+                    panic!("std::mem::swap changed enum");
+                };
+
+                Some(Magazine(MagazineImpl::new(Some(storage))))
+            }
+        }
+    }
+}
+
 impl<const PUSH_MAG: bool> Magazine<PUSH_MAG> {
     /// Checks that current object's state is valid.
     ///
@@ -162,12 +212,15 @@ impl crate::class::ClassInfo {
               ret.as_ref().unwrap().check_rep(Some(self.id)).is_ok(),
               "Returned magazine makes sense for class.")]
     #[inline]
-    pub(crate) fn get_cached_magazine(&self) -> Option<PopMagazine> {
+    pub(crate) fn get_cached_magazine(
+        &self,
+        cache: &mut LocalMagazineCache,
+    ) -> Option<PopMagazine> {
         // Pop from partial magazines first, because we'd prefer to
         // have 0 partial mag.
-        let ret = self
-            .partial_mags
-            .try_pop()
+        let ret = cache
+            .steal_full()
+            .or_else(|| self.partial_mags.try_pop())
             .or_else(|| self.full_mags.pop())?;
 
         if self.zero_init {
@@ -187,9 +240,13 @@ impl crate::class::ClassInfo {
     #[ensures(ret.check_rep(Some(self.id)).is_ok(),
               "Returned magazine makes sense for class.")]
     #[inline]
-    pub(crate) fn allocate_non_full_magazine(&self) -> PushMagazine {
-        self.partial_mags
-            .try_pop()
+    pub(crate) fn allocate_non_full_magazine(
+        &self,
+        cache: &mut LocalMagazineCache,
+    ) -> PushMagazine {
+        cache
+            .steal_empty()
+            .or_else(|| self.partial_mags.try_pop())
             .unwrap_or_else(|| self.rack.allocate_empty_magazine())
     }
 
@@ -215,7 +272,8 @@ impl crate::class::ClassInfo {
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn refill_magazine(&self, mag: &mut PopMagazine) -> Option<LinearRef> {
-        if let Some(mut new_mag) = self.get_cached_magazine() {
+        let mut empty_cache = LocalMagazineCache::Nothing;
+        if let Some(mut new_mag) = self.get_cached_magazine(&mut empty_cache) {
             assert!(!new_mag.is_empty());
 
             let allocated = new_mag.get();
@@ -257,7 +315,8 @@ impl crate::class::ClassInfo {
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn clear_magazine(&self, mag: &mut PushMagazine, spilled: LinearRef) {
-        let mut new_mag = self.allocate_non_full_magazine();
+        let mut empty_cache = LocalMagazineCache::Nothing;
+        let mut new_mag = self.allocate_non_full_magazine(&mut empty_cache);
 
         assert!(!new_mag.is_full());
         assert_eq!(new_mag.put(spilled), None);

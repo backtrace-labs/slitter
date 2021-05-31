@@ -34,6 +34,7 @@ use crate::cache;
 use crate::class::Class;
 use crate::class::ClassInfo;
 use crate::linear_ref::LinearRef;
+use crate::magazine::LocalMagazineCache;
 
 impl Class {
     /// Attempts to return a newly allocated object for this `Class`.
@@ -74,7 +75,8 @@ impl ClassInfo {
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn allocate_slow(&self) -> Option<LinearRef> {
-        if let Some(mut mag) = self.get_cached_magazine() {
+        let mut empty_cache = LocalMagazineCache::Nothing;
+        if let Some(mut mag) = self.get_cached_magazine(&mut empty_cache) {
             let allocated = mag.get();
             assert!(allocated.is_some());
 
@@ -98,7 +100,8 @@ impl ClassInfo {
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn release_slow(&self, block: LinearRef) {
-        let mut mag = self.allocate_non_full_magazine();
+        let mut empty_cache = LocalMagazineCache::Nothing;
+        let mut mag = self.allocate_non_full_magazine(&mut empty_cache);
 
         // Deallocation must succeed.
         assert_eq!(mag.put(block), None);
