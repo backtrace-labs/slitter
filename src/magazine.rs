@@ -70,11 +70,26 @@ impl<const PUSH_MAG: bool> Magazine<PUSH_MAG> {
 
         // If we have an allocation class, the types must match.
         if let Some(class) = maybe_class {
+            let info = class.info();
+            let zeroed_out = |alloc: &LinearRef| {
+                let ptr = alloc.get().as_ptr() as *const u8;
+
+                (0..info.layout.size()).all(|i| unsafe { std::ptr::read(ptr.add(i)) } == 0)
+            };
+
             for i in 0..self.0.len() {
                 if let Some(alloc) = self.0.nth(i) {
                     debug_allocation_map::can_be_allocated(class, alloc.get())?;
                     debug_type_map::is_class(class, alloc)?;
                     press::check_allocation(class, alloc.get().as_ptr() as usize)?;
+
+                    // If allocations are supposed to be zero-initialised,
+                    // everything in a pop mag should be zeroed out.
+                    if !PUSH_MAG && info.zero_init {
+                        if !zeroed_out(alloc) {
+                            return Err("Non-zero-initialised cached allocation");
+                        }
+                    }
                 }
             }
         }
