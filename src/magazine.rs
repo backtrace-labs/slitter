@@ -161,19 +161,35 @@ impl crate::class::ClassInfo {
     #[ensures(ret.is_some() ->
               ret.as_ref().unwrap().check_rep(Some(self.id)).is_ok(),
               "Returned magazine makes sense for class.")]
-    #[inline(never)]
+    #[inline]
     pub(crate) fn get_cached_magazine(&self) -> Option<PopMagazine> {
-        self.partial_mags.pop().or_else(|| self.full_mags.pop())
+        // Pop from partial magazines first, because we'd prefer to
+        // have 0 partial mag.
+        let ret = self
+            .partial_mags
+            .try_pop()
+            .or_else(|| self.full_mags.pop())?;
+
+        if self.zero_init {
+            for allocation in ret.get_populated() {
+                unsafe {
+                    let alloc = &*allocation.as_ptr();
+                    std::ptr::write_bytes(alloc.get().as_ptr() as *mut u8, 0, self.layout.size());
+                }
+            }
+        }
+
+        Some(ret)
     }
 
     /// Returns a magazine; it may be partially populated or empty.
     #[ensures(!ret.is_full(), "The returned magazine is never empty.")]
     #[ensures(ret.check_rep(Some(self.id)).is_ok(),
               "Returned magazine makes sense for class.")]
-    #[inline(never)]
+    #[inline]
     pub(crate) fn allocate_non_full_magazine(&self) -> PushMagazine {
         self.partial_mags
-            .pop()
+            .try_pop()
             .unwrap_or_else(|| self.rack.allocate_empty_magazine())
     }
 
@@ -199,23 +215,8 @@ impl crate::class::ClassInfo {
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn refill_magazine(&self, mag: &mut PopMagazine) -> Option<LinearRef> {
-        // Try to get a new non-empty magazine; prefer partial mags
-        // because we prefer to have 0 partial mags.
-        if let Some(mut new_mag) = self.partial_mags.try_pop().or_else(|| self.full_mags.pop()) {
+        if let Some(mut new_mag) = self.get_cached_magazine() {
             assert!(!new_mag.is_empty());
-
-            if self.zero_init {
-                for allocation in new_mag.get_populated() {
-                    unsafe {
-                        let alloc = &*allocation.as_ptr();
-                        std::ptr::write_bytes(
-                            alloc.get().as_ptr() as *mut u8,
-                            0,
-                            self.layout.size(),
-                        );
-                    }
-                }
-            }
 
             let allocated = new_mag.get();
             std::mem::swap(&mut new_mag, mag);
@@ -256,11 +257,7 @@ impl crate::class::ClassInfo {
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(never)]
     pub(crate) fn clear_magazine(&self, mag: &mut PushMagazine, spilled: LinearRef) {
-        // Get a new non-full magazine.
-        let mut new_mag = self
-            .partial_mags
-            .try_pop()
-            .unwrap_or_else(|| self.rack.allocate_empty_magazine());
+        let mut new_mag = self.allocate_non_full_magazine();
 
         assert!(!new_mag.is_full());
         assert_eq!(new_mag.put(spilled), None);
