@@ -55,16 +55,58 @@ pub struct Magazine<const PUSH_MAG: bool>(pub(crate) MagazineImpl<PUSH_MAG>);
 pub type PushMagazine = Magazine<true>;
 pub type PopMagazine = Magazine<false>;
 
+/// Thread-local allocation caches also cache magazines locally.
+/// Buffering one magazine before pushing it to global freelists,
+/// helps avoid contention for common patterns like back-to-back
+/// allocation and deallocation.
 pub enum LocalMagazineCache {
     Nothing,
-    Empty(PopMagazine),
-    Full(PushMagazine),
+    Empty(PopMagazine), // Always an empty magazine with storage.
+    Full(PushMagazine), // Always a full magazine with storage.
 }
 
 impl LocalMagazineCache {
+    /// Stores `mag` in the cache, and returns the previously-cached
+    /// magazine, if any.
+    ///
+    /// If `mag` cannot be cached, returns `mag`.
+    pub fn populate<const PUSH_MAG: bool>(
+        &mut self,
+        mag: Magazine<PUSH_MAG>,
+    ) -> Option<Magazine<PUSH_MAG>> {
+        use LocalMagazineCache::*;
+
+        if !mag.has_storage() {
+            return Some(mag);
+        }
+
+        let mut local;
+
+        if mag.is_full() {
+            let storage = mag.0.storage();
+            assert!(storage.is_some(), "Checked on entry");
+            local = LocalMagazineCache::Full(Magazine(MagazineImpl::new(storage)));
+        } else if mag.is_empty() {
+            let storage = mag.0.storage();
+            assert!(storage.is_some(), "Checked on entry");
+            local = LocalMagazineCache::Empty(Magazine(MagazineImpl::new(storage)));
+        } else {
+            return Some(mag);
+        }
+
+        std::mem::swap(self, &mut local);
+
+        match local {
+            Nothing => None,
+            Empty(cached) => Some(Magazine(MagazineImpl::new(cached.0.storage()))),
+            Full(cached) => Some(Magazine(MagazineImpl::new(cached.0.storage()))),
+        }
+    }
+
     /// Returns a full `PopMagazine` if one is cached.
     pub fn steal_full(&mut self) -> Option<PopMagazine> {
         use LocalMagazineCache::*;
+
         match self {
             Nothing => None,
             Empty(_) => None,
@@ -78,6 +120,10 @@ impl LocalMagazineCache {
                     panic!("std::mem::swap changed enum");
                 };
 
+                assert_eq!(
+                    storage.num_allocated_slow,
+                    crate::magazine_impl::MAGAZINE_SIZE
+                );
                 Some(Magazine(MagazineImpl::new(Some(storage))))
             }
         }
@@ -86,6 +132,7 @@ impl LocalMagazineCache {
     /// Returns an empty `PushMagazine` if one is cached.
     pub fn steal_empty(&mut self) -> Option<PushMagazine> {
         use LocalMagazineCache::*;
+
         match self {
             Nothing => None,
             Full(_) => None,
@@ -99,6 +146,7 @@ impl LocalMagazineCache {
                     panic!("std::mem::swap changed enum");
                 };
 
+                assert_eq!(storage.num_allocated_slow, 0);
                 Some(Magazine(MagazineImpl::new(Some(storage))))
             }
         }
@@ -271,14 +319,17 @@ impl crate::class::ClassInfo {
               press::check_allocation(self.id, ret.as_ref().unwrap().get().as_ptr() as usize).is_ok(),
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(never)]
-    pub(crate) fn refill_magazine(&self, mag: &mut PopMagazine) -> Option<LinearRef> {
-        let mut empty_cache = LocalMagazineCache::Nothing;
-        if let Some(mut new_mag) = self.get_cached_magazine(&mut empty_cache) {
+    pub(crate) fn refill_magazine(
+        &self,
+        mag: &mut PopMagazine,
+        cache: &mut LocalMagazineCache,
+    ) -> Option<LinearRef> {
+        if let Some(mut new_mag) = self.get_cached_magazine(cache) {
             assert!(!new_mag.is_empty());
 
             let allocated = new_mag.get();
             std::mem::swap(&mut new_mag, mag);
-            self.release_magazine(new_mag);
+            self.release_magazine(new_mag, Some(cache));
 
             return allocated;
         }
@@ -292,7 +343,7 @@ impl crate::class::ClassInfo {
             let mut new_mag = self.rack.allocate_empty_magazine();
             std::mem::swap(&mut new_mag, mag);
 
-            self.release_magazine(new_mag);
+            self.release_magazine(new_mag, Some(cache));
         }
 
         let (count, allocated) = self.press.allocate_many_objects(mag.get_unpopulated());
@@ -314,22 +365,37 @@ impl crate::class::ClassInfo {
     #[requires(press::check_allocation(self.id, spilled.get().as_ptr() as usize).is_ok(),
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(never)]
-    pub(crate) fn clear_magazine(&self, mag: &mut PushMagazine, spilled: LinearRef) {
-        let mut empty_cache = LocalMagazineCache::Nothing;
-        let mut new_mag = self.allocate_non_full_magazine(&mut empty_cache);
+    pub(crate) fn clear_magazine(
+        &self,
+        mag: &mut PushMagazine,
+        cache: &mut LocalMagazineCache,
+        spilled: LinearRef,
+    ) {
+        let mut new_mag = self.allocate_non_full_magazine(cache);
 
         assert!(!new_mag.is_full());
         assert_eq!(new_mag.put(spilled), None);
 
         std::mem::swap(&mut new_mag, mag);
-        self.release_magazine(new_mag);
+        self.release_magazine(new_mag, Some(cache));
     }
 
     /// Acquires ownership of `mag` and its cached allocations.
     #[requires(mag.check_rep(Some(self.id)).is_ok(),
                "Magazine must match `self`.")]
     #[inline(never)]
-    pub(crate) fn release_magazine<const PUSH_MAG: bool>(&self, mag: Magazine<PUSH_MAG>) {
+    pub(crate) fn release_magazine<const PUSH_MAG: bool>(
+        &self,
+        mut mag: Magazine<PUSH_MAG>,
+        maybe_cache: Option<&mut LocalMagazineCache>,
+    ) {
+        if let Some(cache) = maybe_cache {
+            match cache.populate(mag) {
+                Some(new_mag) => mag = new_mag,
+                None => return,
+            }
+        }
+
         if mag.is_empty() {
             self.rack.release_empty_magazine(mag);
         } else if mag.is_full() {

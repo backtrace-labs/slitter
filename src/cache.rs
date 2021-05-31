@@ -199,12 +199,12 @@ impl Drop for Cache {
             );
 
             if let Some(info) = slot.info {
-                info.release_magazine(mags.alloc);
-                info.release_magazine(mags.release);
+                info.release_magazine(mags.alloc, None);
+                info.release_magazine(mags.release, None);
                 match slot.cache {
                     Nothing => (),
-                    Empty(mag) => info.release_magazine(mag),
-                    Full(mag) => info.release_magazine(mag),
+                    Empty(mag) => info.release_magazine(mag, None),
+                    Full(mag) => info.release_magazine(mag, None),
                 }
             } else {
                 // This must be the padding slot at index 0.
@@ -410,10 +410,10 @@ impl Cache {
             return Some(alloc);
         }
 
-        self.per_class_info[index]
-            .info
+        let info = &mut self.per_class_info[index];
+        info.info
             .expect("must have class info")
-            .refill_magazine(mag)
+            .refill_magazine(mag, &mut info.cache)
     }
 
     /// Attempts to return an allocation for `class`.  Consumes from
@@ -470,10 +470,10 @@ impl Cache {
         // We prefer to cache freshly deallocated objects, for
         // temporal locality.
         if let Some(spill) = mag.put(block) {
-            self.per_class_info[index]
-                .info
+            let info = &mut self.per_class_info[index];
+            info.info
                 .expect("must have class info")
-                .clear_magazine(mag, spill);
+                .clear_magazine(mag, &mut info.cache, spill);
         }
     }
 

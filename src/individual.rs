@@ -80,7 +80,7 @@ impl ClassInfo {
             let allocated = mag.get();
             assert!(allocated.is_some());
 
-            self.release_magazine(mag);
+            self.release_magazine(mag, None);
             allocated
         } else {
             // We can assume the press always allocates zero-filled
@@ -105,6 +105,6 @@ impl ClassInfo {
 
         // Deallocation must succeed.
         assert_eq!(mag.put(block), None);
-        self.release_magazine(mag);
+        self.release_magazine(mag, None);
     }
 }

@@ -47,7 +47,7 @@ pub struct MagazineStorage {
     /// remainder are uninitialised.
     ///
     /// This field may not be accurate when wrapped in a `MagazineImpl`.
-    num_allocated_slow: u32,
+    pub(crate) num_allocated_slow: u32,
 }
 
 /// The `MagazineImpl` is the actual implementation for the storage.
