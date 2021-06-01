@@ -47,3 +47,17 @@ int32_t slitter__release_region(void *base, size_t size);
  * Returns 0 on success, and `-errno` on failure.
  */
 int32_t slitter__allocate_region(void *base, size_t size);
+
+/**
+ * Attempts to back the region of address space starting at `base` and
+ * continuing for `size` bytes with memory from `fd`, starting at
+ * `offset`.  The caller must have first acquired ownership of the
+ * address space with `slitter__reserve_region`.
+ *
+ * The region will be safe for read and writes, but may be
+ * demand-faulted later.
+ *
+ * Returns 0 on success, and `-errno` on failure.
+ */
+int32_t slitter__allocate_fd_region(int fd, size_t offset,
+    void *base, size_t size);

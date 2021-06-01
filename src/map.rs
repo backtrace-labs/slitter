@@ -1,8 +1,8 @@
 //! Rust bindings for the support code in C that calls out to mmap.
 //!
 //! TODO: wrap strerror_r usefully.
-use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::{ffi::c_void, fs::File};
 
 // These helpers are declared in `c/map.h`.
 extern "C" {
@@ -10,6 +10,12 @@ extern "C" {
     fn slitter__reserve_region(size: usize, OUT_errno: *mut i32) -> Option<NonNull<c_void>>;
     fn slitter__release_region(base: NonNull<c_void>, size: usize) -> i32;
     fn slitter__allocate_region(base: NonNull<c_void>, size: usize) -> i32;
+    fn slitter__allocate_fd_region(
+        fd: i32,
+        offset: usize,
+        base: NonNull<c_void>,
+        size: usize,
+    ) -> i32;
 }
 
 fn page_size_or_die() -> usize {
@@ -93,6 +99,46 @@ pub fn allocate_region(base: NonNull<c_void>, size: usize) -> Result<(), i32> {
     );
 
     let ret = unsafe { slitter__allocate_region(base, size) };
+
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(-ret)
+    }
+}
+
+/// Backs a region of `size` bytes starting at `base` with
+/// (demand-faulted) memory from `file`.  The `file` must be empty on
+/// entry.
+///
+/// The size argument must be a multiple of the page size.
+pub fn allocate_file_region(file: File, base: NonNull<c_void>, size: usize) -> Result<(), i32> {
+    use std::os::unix::io::FromRawFd;
+    use std::os::unix::io::IntoRawFd;
+
+    assert_eq!(
+        file.metadata().expect("has metadata").len(),
+        0,
+        "The file must be empty on entry"
+    );
+
+    if size == 0 {
+        return Ok(());
+    }
+
+    assert!(
+        (size % page_size()) == 0,
+        "Bad region size={} page_size={}",
+        size,
+        page_size()
+    );
+
+    file.set_len(size as u64).map_err(|_| 0)?;
+    let fd = file.into_raw_fd();
+    let ret = unsafe { slitter__allocate_fd_region(fd, 0, base, size) };
+
+    // Make sure to drop the file before returning.
+    unsafe { File::from_raw_fd(fd) };
 
     if ret == 0 {
         Ok(())

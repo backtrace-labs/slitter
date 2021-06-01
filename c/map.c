@@ -60,3 +60,16 @@ slitter__allocate_region(void *base, size_t size)
 
 	return -errno;
 }
+
+int32_t
+slitter__allocate_fd_region(int fd, size_t offset, void *base, size_t size)
+{
+	void *ret;
+
+	ret = mmap(base, size, PROT_READ | PROT_WRITE,
+            MAP_FIXED | MAP_SHARED, fd, (off_t)offset);
+	if (ret != MAP_FAILED)
+		return 0;
+
+	return -errno;
+}

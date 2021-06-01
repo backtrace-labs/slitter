@@ -63,6 +63,19 @@ struct slitter_class_config {
 struct slitter_class slitter_class_register(const struct slitter_class_config *);
 
 /**
+ * Updates the parent directory for the file-backed slabs' backing
+ * files.  NULL resets to the default.
+ *
+ * The default directory is `TMPFILE`, or `/tmp/`, and will be used if
+ * this function is not called before the first file-backed slab
+ * allocation.
+ *
+ * It is safe to call this function at any time.  However, the update
+ * will only take effect when Slitter maps a new 1 GB chunk of data.
+ */
+void slitter_set_file_backed_slab_directory(const char *directory);
+
+/**
  * Returns a new allocation for the object class.
  *
  * On error, this function will abort.

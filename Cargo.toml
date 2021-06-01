@@ -16,6 +16,7 @@ contracts = { version = "0.6", optional = true }
 disabled_contracts = "0.1"
 lazy_static = "1"
 static_assertions = "1.1"
+tempfile = "3"
 
 [build-dependencies]
 cc = "1"
