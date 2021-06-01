@@ -6,6 +6,7 @@ mod magazine;
 mod magazine_impl;
 mod magazine_stack;
 mod map;
+mod mapper;
 mod mill;
 mod press;
 mod rack;
@@ -29,6 +30,7 @@ mod debug_type_map;
 pub use class::Class;
 pub use class::ClassConfig;
 pub use class::ForeignClassConfig;
+pub use mapper::Mapper;
 
 /// Registers a new allocation class globally
 ///
