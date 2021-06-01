@@ -81,16 +81,21 @@ impl ClassConfig {
     ///
     /// This function assumes `config_ptr` is NULL or valid.
     pub unsafe fn from_c(config_ptr: *const ForeignClassConfig) -> Option<ClassConfig> {
+        // Attempts to convert a C string to an optional String.
+        fn to_nullable_str(ptr: *const c_char) -> Result<Option<String>, std::str::Utf8Error> {
+            if ptr.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(unsafe { CStr::from_ptr(ptr) }.to_str()?.to_owned()))
+            }
+        }
+
         if config_ptr.is_null() {
             return None;
         }
 
         let config: &ForeignClassConfig = &*config_ptr;
-        let name = if config.name.is_null() {
-            None
-        } else {
-            Some(CStr::from_ptr(config.name).to_str().ok()?.to_owned())
-        };
+        let name = to_nullable_str(config.name).ok()?;
 
         let layout = Layout::from_size_align(config.size.max(1), /*align=*/ 8).ok()?;
         Some(ClassConfig {
