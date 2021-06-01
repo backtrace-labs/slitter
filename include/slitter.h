@@ -33,6 +33,11 @@ struct slitter_class_config {
 	 * If true, zero-fill recycled allocations.
 	 */
 	bool zero_init;
+
+        /*
+         * The name of the underlying mapper, or NULL for default.
+         */
+        const char *mapper_name;
 };
 
 #define DEFINE_SLITTER_CLASS(NAME, ...)					\

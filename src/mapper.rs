@@ -94,7 +94,24 @@ pub trait Mapper: std::fmt::Debug + Sync {
 }
 
 #[derive(Debug)]
-pub struct DefaultMapper {}
+struct DefaultMapper {}
+
+/// Returns the mapper for the given `name`, if one exists, or the
+/// default mapper if `name` is `None`.
+///
+/// # Errors
+///
+/// Returns `Err` if no such mapper is defined.
+pub fn get_mapper(name: Option<&str>) -> Result<&'static dyn Mapper, &'static str> {
+    lazy_static::lazy_static! {
+        static ref DEFAULT_MAPPER: DefaultMapper = DefaultMapper{};
+    }
+
+    match name {
+        Some(_) => Err("Mapper unknown"),
+        None => Ok(&*DEFAULT_MAPPER),
+    }
+}
 
 #[contract_trait]
 impl Mapper for DefaultMapper {

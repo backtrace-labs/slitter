@@ -38,6 +38,7 @@ pub struct ClassConfig {
     pub name: Option<String>,
     pub layout: Layout,
     pub zero_init: bool,
+    pub mapper_name: Option<String>,
 }
 
 /// The extern "C" interface uses this version of `ClassConfig`.
@@ -46,6 +47,7 @@ pub struct ForeignClassConfig {
     name: *const c_char,
     size: usize,
     zero_init: bool,
+    mapper_name: *const c_char,
 }
 
 /// Slitter stores internal information about configured classes with
@@ -95,13 +97,12 @@ impl ClassConfig {
         }
 
         let config: &ForeignClassConfig = &*config_ptr;
-        let name = to_nullable_str(config.name).ok()?;
-
         let layout = Layout::from_size_align(config.size.max(1), /*align=*/ 8).ok()?;
         Some(ClassConfig {
-            name,
+            name: to_nullable_str(config.name).ok()?,
             layout,
             zero_init: config.zero_init,
+            mapper_name: to_nullable_str(config.mapper_name).ok()?,
         })
     }
 }
@@ -150,7 +151,7 @@ impl Class {
             rack: crate::rack::get_default_rack(),
             full_mags: MagazineStack::new(),
             partial_mags: MagazineStack::new(),
-            press: Press::new(id, layout)?,
+            press: Press::new(id, layout, config.mapper_name.as_deref())?,
             id,
             zero_init: config.zero_init,
         }));
@@ -217,6 +218,7 @@ mod test {
             name: Some("alloc_smoke".into()),
             layout: Layout::from_size_align(8, 8).expect("layout should build"),
             zero_init: true,
+            mapper_name: None,
         })
         .expect("Class should build");
 
@@ -239,6 +241,7 @@ mod test {
             name: Some("alloc_push_pop".into()),
             layout: Layout::from_size_align(8, 8).expect("layout should build"),
             zero_init: true,
+            mapper_name: None,
         })
         .expect("Class should build");
 
@@ -267,6 +270,7 @@ mod test {
             name: Some("alloc_push_pop".into()),
             layout: Layout::from_size_align(8, 8).expect("layout should build"),
             zero_init: true,
+            mapper_name: None,
         })
         .expect("Class should build");
 
@@ -311,6 +315,7 @@ mod test {
                 name: Some("random".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
                 zero_init: false,
+                mapper_name: None,
             })
             .expect("Class should build");
 
@@ -369,11 +374,13 @@ mod test {
                     name: Some("random_class_1".into()),
                     layout: Layout::from_size_align(8, 8).expect("layout should build"),
                     zero_init: true,
+                    mapper_name: None,
                 }).expect("Class should build"),
                 Class::new(ClassConfig {
                     name: Some("random_class_2".into()),
                     layout: Layout::from_size_align(16, 8).expect("layout should build"),
                     zero_init: false,
+                    mapper_name: None,
                 }).expect("Class should build"),
             ];
 
@@ -424,6 +431,7 @@ mod test {
                 name: Some("lifo".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
                 zero_init: true,
+                mapper_name: None,
             })
             .expect("Class should build");
 
@@ -460,6 +468,7 @@ mod test {
                 name: Some("lifo".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
                 zero_init: false,
+                mapper_name: None,
             })
             .expect("Class should build");
 
@@ -495,6 +504,7 @@ mod test {
                 name: Some("lifo".into()),
                 layout: Layout::from_size_align(8, 8).expect("layout should build"),
                 zero_init: true,
+                mapper_name: None,
             })
             .expect("Class should build");
 

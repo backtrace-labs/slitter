@@ -104,7 +104,21 @@ pub fn check_allocation(class: Class, address: usize) -> Result<(), &'static str
 }
 
 impl Press {
-    pub fn new(class: Class, mut layout: Layout) -> Result<Self, &'static str> {
+    /// Returns a fresh `Press` for an object `class` with that object
+    /// `layout`, and the underlying mapper `mapper_name` (`None` for
+    /// the default `Mapper` / `Mill`).
+    ///
+    /// All presses with the same `mapper_name` share the same `Mill`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the layout violates the allocator's constraints,
+    /// or no mapper can be found for `mapper_name`.
+    pub fn new(
+        class: Class,
+        mut layout: Layout,
+        mapper_name: Option<&str>,
+    ) -> Result<Self, &'static str> {
         if layout.align() > MAX_OBJECT_ALIGNMENT {
             return Err("slitter only supports alignment up to 4 KB");
         }
@@ -117,7 +131,7 @@ impl Press {
         } else {
             Ok(Self {
                 bump: Default::default(),
-                mill: Mutex::new(mill::get_default_mill()),
+                mill: Mutex::new(mill::get_mill(mapper_name)?),
                 layout,
                 class,
             })

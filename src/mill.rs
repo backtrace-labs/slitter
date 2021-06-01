@@ -28,11 +28,13 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::num::NonZeroU32;
 use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
 
 #[cfg(any(
     all(test, feature = "check_contracts_in_tests"),
@@ -40,7 +42,6 @@ use std::sync::atomic::AtomicUsize;
 ))]
 use crate::debug_arange_map;
 
-use crate::mapper::DefaultMapper;
 use crate::mapper::Mapper;
 
 /// Data chunks are naturally aligned to their size, 1GB.
@@ -185,20 +186,27 @@ unsafe impl Send for Chunk {}
 #[derive(Debug)]
 pub struct Mill {
     mapper: &'static dyn Mapper,
-    current_chunk: std::sync::Mutex<Option<Chunk>>,
+    current_chunk: Mutex<Option<Chunk>>,
 }
 
-/// Returns a reference to the shared default `Mill`.
-pub fn get_default_mill() -> &'static Mill {
+/// Returns a reference to the `Mill` for that `mapper_name`,
+/// or the default `Mill` if the name is `None`.
+///
+/// # Errors
+///
+/// Returns `Err` if no such mapper is defined.
+pub fn get_mill(mapper_name: Option<&str>) -> Result<&'static Mill, &'static str> {
     lazy_static::lazy_static! {
-        static ref DEFAULT_MILL: &'static Mill = {
-            let default_mapper = Box::leak(Box::new(DefaultMapper{}));
+        // The keys are the addresses of `&'static dyn Mapper`.
+        static ref MILLS: Mutex<HashMap<usize, &'static Mill>> = Default::default();
+    }
 
-            Box::leak(Box::new(Mill::new(default_mapper)))
-        };
-    };
-
-    &DEFAULT_MILL
+    let mapper: &'static _ = crate::mapper::get_mapper(mapper_name)?;
+    let address = mapper as *const _ as *const () as usize;
+    let mut mills = MILLS.lock().unwrap();
+    Ok(mills
+        .entry(address)
+        .or_insert_with(|| Box::leak(Box::new(Mill::new(mapper)))))
 }
 
 impl SpanMetadata {
@@ -666,7 +674,7 @@ impl Mill {
 fn test_allocated_span_valid() {
     // Check that we can always construct an AllocatedChunk when we
     // pass in large enough regions.
-    let mapper = DefaultMapper {};
+    let mapper = crate::mapper::get_mapper(None).expect("Default mapper exists");
 
     // The test cases below assume that the GUARD_PAGE_SIZE and
     // METADATA_PAGE_SIZE are multiples of the page size.
@@ -676,7 +684,7 @@ fn test_allocated_span_valid() {
     // We assume the zero page can't be mapped.  See what happens when
     // we get the next page.
     let at_start = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(mapper.page_size()).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -688,7 +696,7 @@ fn test_allocated_span_valid() {
     // represent the end of the region.  I don't think it's worth
     // adding complexity to handle a situation that never happens.
     let at_end = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(usize::MAX - MAPPED_REGION_SIZE - mapper.page_size() + 1).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -696,7 +704,7 @@ fn test_allocated_span_valid() {
     at_end.check_rep();
 
     let aligned = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(DATA_ALIGNMENT).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -704,7 +712,7 @@ fn test_allocated_span_valid() {
     aligned.check_rep();
 
     let unaligned = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(DATA_ALIGNMENT + mapper.page_size()).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -712,7 +720,7 @@ fn test_allocated_span_valid() {
     unaligned.check_rep();
 
     let offset_guard = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - GUARD_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -720,7 +728,7 @@ fn test_allocated_span_valid() {
     offset_guard.check_rep();
 
     let offset_meta = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - GUARD_PAGE_SIZE - METADATA_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
     )
@@ -728,7 +736,7 @@ fn test_allocated_span_valid() {
     offset_meta.check_rep();
 
     let off_by_one = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(
             DATA_ALIGNMENT - 2 * GUARD_PAGE_SIZE - METADATA_PAGE_SIZE + mapper.page_size(),
         )
@@ -739,7 +747,7 @@ fn test_allocated_span_valid() {
     off_by_one.check_rep();
 
     let exact_fit = AllocatedChunk::new_from_range(
-        &mapper,
+        mapper,
         NonZeroUsize::new(DATA_ALIGNMENT - 2 * GUARD_PAGE_SIZE - METADATA_PAGE_SIZE).unwrap(),
         MAPPED_REGION_SIZE,
     )
