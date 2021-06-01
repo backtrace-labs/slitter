@@ -12,8 +12,10 @@ use contracts::*;
 )))]
 use disabled_contracts::*;
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::sync::Mutex;
 
 #[cfg(any(
     all(test, feature = "check_contracts_in_tests"),
@@ -96,6 +98,22 @@ pub trait Mapper: std::fmt::Debug + Sync {
 #[derive(Debug)]
 struct DefaultMapper {}
 
+lazy_static::lazy_static! {
+    static ref NAMED_MAPPERS: Mutex<HashMap<String, &'static dyn Mapper>> = {
+        let mut map: HashMap<String, &'static dyn Mapper> = HashMap::new();
+
+        map.insert("file".to_string(), Box::leak(Box::new(crate::file_backed_mapper::FileBackedMapper{})));
+        Mutex::new(map)
+    };
+}
+
+/// Upserts the mapper associated with `name`.
+pub fn register_mapper(name: String, mapper: &'static dyn Mapper) {
+    let mut mappers = NAMED_MAPPERS.lock().unwrap();
+
+    mappers.insert(name, mapper);
+}
+
 /// Returns the mapper for the given `name`, if one exists, or the
 /// default mapper if `name` is `None`.
 ///
@@ -108,7 +126,11 @@ pub fn get_mapper(name: Option<&str>) -> Result<&'static dyn Mapper, &'static st
     }
 
     match name {
-        Some(_) => Err("Mapper unknown"),
+        Some(key) => {
+            let mappers = NAMED_MAPPERS.lock().unwrap();
+
+            Ok(*mappers.get(key).ok_or("Mapper not found")?)
+        }
         None => Ok(&*DEFAULT_MAPPER),
     }
 }

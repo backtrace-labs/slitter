@@ -1,5 +1,6 @@
 mod cache;
 mod class;
+mod file_backed_mapper;
 mod individual;
 mod linear_ref;
 mod magazine;
@@ -30,6 +31,7 @@ mod debug_type_map;
 pub use class::Class;
 pub use class::ClassConfig;
 pub use class::ForeignClassConfig;
+pub use mapper::register_mapper;
 pub use mapper::Mapper;
 
 /// Registers a new allocation class globally

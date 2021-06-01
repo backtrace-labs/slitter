@@ -36,6 +36,8 @@ struct slitter_class_config {
 
         /*
          * The name of the underlying mapper, or NULL for default.
+         *
+         * A mapper name of "file" will use the file-backed mapper.
          */
         const char *mapper_name;
 };
