@@ -29,22 +29,27 @@ lazy_static::lazy_static! {
 
 /// Updates the parent directory for the file-backed mapper's
 /// temporary files to `path`.
+///
+/// A value of `None` restores the default (`TMPDIR`), and
+/// `Some(":memory")` forces regular file mappings.
 pub fn set_file_backed_slab_directory(path: Option<PathBuf>) {
     let mut global_path = FILE_BACKED_PATH.lock().unwrap();
 
     *global_path = path;
 }
 
-/// Returns a temporary File in `FILE_BACKED_PATH`, or in the the
-/// global `TMPDIR`.
+/// Returns a temporary File in `FILE_BACKED_PATH`, or in the
+/// global `TMPDIR`.  If the file is None, the mapper should
+/// instead use a regular anonymous memory mapping.
 ///
-/// TODO: return a `std::io::Result<File>`.
-fn get_temp_file() -> Result<File, i32> {
+/// TODO: return a `std::io::Result<Option<File>>`.
+fn get_temp_file() -> Result<Option<File>, i32> {
     let path = FILE_BACKED_PATH.lock().unwrap();
 
     match &*path {
-        Some(dir) => tempfile::tempfile_in(dir),
-        None => tempfile::tempfile(),
+        Some(dir) if dir.to_str() == Some(":memory:") => Ok(None),
+        Some(dir) => tempfile::tempfile_in(dir).map(Some),
+        None => tempfile::tempfile().map(Some),
     }
     .map_err(|e| e.raw_os_error().unwrap_or(0))
 }
@@ -77,6 +82,9 @@ impl Mapper for FileBackedMapper {
     fn allocate_data(&self, base: NonNull<c_void>, size: usize) -> Result<(), i32> {
         let tempfile = get_temp_file()?;
 
-        crate::map::allocate_file_region(tempfile, base, size)
+        match tempfile {
+            Some(file) => crate::map::allocate_file_region(file, base, size),
+            None => crate::map::allocate_region(base, size),
+        }
     }
 }

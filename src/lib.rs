@@ -51,7 +51,8 @@ pub unsafe extern "C" fn slitter_class_register(config_ptr: *const ForeignClassC
 
 /// Updates the directory for the file-backed slab's temporary files.
 ///
-/// NULL reverts to the default.
+/// NULL reverts to the default, and ":memory:" forces regular
+/// anonymous mappings.
 ///
 /// # Safety
 ///
