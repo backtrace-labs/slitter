@@ -1,6 +1,3 @@
-# slitter-wip
-Temporary review repo for the slitter allocator
-
 Slitter is a less footgunny slab allocator
 ==========================================
 
