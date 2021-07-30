@@ -1,8 +1,10 @@
 [package]
 name = "slitter"
 version = "0.1.0"
-authors = ["Paul Khuong <pkhuong@backtrace.io>"]
 edition = "2018"
+license = "MIT"
+description = "A C- and Rust-callable slab allocator with a focus on safety"
+repository = "https://github.com/backtrace-labs/slitter"
 
 [features]
 default = ["check_contracts_in_tests", "c_fast_path"]
