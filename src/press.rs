@@ -4,13 +4,7 @@
 //!
 //! While each class gets its own press, the latter requirement means
 //! that the presses must all implement compatible metadata stashing
-//! schemes.
-//!
-//! For now, we assume that each `Press` allocates data linearly (with
-//! a bump pointer) from 2 MB-aligned spans of 2 MB, and hides the
-//! corresponding metadata 8 KB *before* that span, with a guard page
-//! between the span's metadata and the actual span data, and more
-//! guard pages before the metadata and after the span itself.
+//! schemes.  This works because `Mill`s all use the same scheme.
 //!
 //! We enable mostly lock-free operations by guaranteeing that each
 //! span and corresponding metadata is immortal once allocated.
