@@ -65,3 +65,42 @@ b. Slitter will track the number of objects allocated and recycled in
 
 c. Slitter will sample a small fraction of allocations for heap
    profiling.
+
+How to use Slitter as a C library
+---------------------------------
+
+In order to use Slitter as a C library, we must first build a static
+library with Cargo. Slitter can *only* be called from C via static
+linkage because Cargo will otherwise hide our C functions.  However,
+this also exposes internal Rust symbols, so there can only be one
+statically linked Rust library in any executable.
+
+See `examples/demo.c` for a sample integration, which also
+demonstrates some of the additional checks unlocked by explicit
+allocation class tags.  Execute that file in sh (i.e., `sh
+examples/demo.c`) to build Slitter, build `demo.c` and link it against
+Slitter, and run the resulting `demo` executable.
+
+The `#ifdef MISMATCH` section allocates an object of a derived struct
+type, and releases it as the base type.  The base field is the first
+member of the derived struct, so a plain malloc/free interface is
+unable to tell the difference.  However, since the caller must tell
+`slitter_release` what allocation class it expects the freed pointer
+to be in, Slitter can detect the mismatch.
+
+How to use Slitter within a Rust uber-crate
+-------------------------------------------
+
+When linking multiple Rust libraries with other languages like C or
+C++, one must build a single statically linked (`crate-type =
+["staticlib"]`) Rust crate that depends on all the Rust libraries we
+want to expose, and make sure to re-export the public `extern "C"` 
+definitions from each of the dependencies.
+    
+How to use Slitter from Rust
+----------------------------
+
+We haven't explored that use case, except for tests.  You can look at
+the unit tests at the bottom on `src/class.rs`.  TL;DR: create new
+`Class` objects (they're copiable wrappers around `NonZeroU32`), and
+call `Class::allocate` and `Class::release`.

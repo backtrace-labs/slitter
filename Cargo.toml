@@ -6,6 +6,9 @@ license = "MIT"
 description = "A C- and Rust-callable slab allocator with a focus on safety"
 repository = "https://github.com/backtrace-labs/slitter"
 
+[lib]
+crate-type = ["lib", "staticlib"]
+
 [features]
 default = ["check_contracts_in_tests", "c_fast_path"]
 c_fast_path = []  # Use C, and not Rust, for the fast path.
