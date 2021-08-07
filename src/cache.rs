@@ -430,12 +430,7 @@ impl Cache {
               "Sucessful allocations must have the allocation metadata set correctly.")]
     #[inline(always)]
     fn allocate(&mut self, class: Class) -> Option<LinearRef> {
-        #[cfg(features = "c_fast_path")]
-        const C_FAST_PATH: bool = true;
-        #[cfg(not(features = "c_fast_path"))]
-        const C_FAST_PATH: bool = false;
-
-        if C_FAST_PATH {
+        if cfg!(feature = "c_fast_path") {
             extern "C" {
                 fn slitter_allocate(class: Class) -> Option<LinearRef>;
             }
@@ -489,12 +484,7 @@ impl Cache {
                "Deallocated block must have the allocation metadata set correctly.")]
     #[inline(always)]
     fn release(&mut self, class: Class, block: LinearRef) {
-        #[cfg(features = "c_fast_path")]
-        const C_FAST_PATH: bool = true;
-        #[cfg(not(features = "c_fast_path"))]
-        const C_FAST_PATH: bool = false;
-
-        if C_FAST_PATH {
+        if cfg!(feature = "c_fast_path") {
             extern "C" {
                 fn slitter_release(class: Class, block: LinearRef);
             }
