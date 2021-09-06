@@ -194,6 +194,7 @@ pub extern "C" fn slitter__release_slow(class: Class, block: LinearRef) {
 }
 
 impl Drop for Cache {
+    #[requires(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
     fn drop(&mut self) {
         unsafe {
             slitter__cache_register(std::ptr::null_mut(), 0);
@@ -267,7 +268,7 @@ impl Cache {
 
         #[cfg(not(feature = "c_fast_path"))]
         let (mags, is_owned) = {
-            let mags = [Magazines; INITIAL_CACHE_SIZE] = Default::default();
+            let mags: [Magazines; INITIAL_CACHE_SIZE] = Default::default();
 
             (Box::leak(Box::new(mags)), true)
         };
