@@ -30,5 +30,5 @@ script:
 
 after_success: |
   if [ "x$TRAVIS_RUST_VERSION" == xstable -a "x$TRAVIS_CPU_ARCH" == xamd64 ]; then
-    PROPTEST_FORK=true cargo tarpaulin --release --no-default-features --features='c_fast_path,test_only_small_constants' --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
+    PROPTEST_FORK=true cargo tarpaulin --follow-exec --release --no-default-features --features='c_fast_path,test_only_small_constants' --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
   fi
