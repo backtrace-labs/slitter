@@ -24,10 +24,11 @@ script:
 - cargo clean
 - cargo build
 - PROPTEST_FORK=true cargo test --release
+- PROPTEST_FORK=true cargo test --release --features='test_only_small_constants'
 - PROPTEST_FORK=true cargo test --release --no-default-features --features='check_contracts_in_tests'
 - PROPTEST_FORK=true cargo test --release --no-default-features --features='c_fast_path'
 
 after_success: |
   if [ "x$TRAVIS_RUST_VERSION" == xstable -a "x$TRAVIS_CPU_ARCH" == xamd64 ]; then
-    PROPTEST_FORK=true cargo tarpaulin --release --features='test_only_small_constants' --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
+    PROPTEST_FORK=true cargo tarpaulin --release --no-default-features --features='c_fast_path,test_only_small_constants' --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
   fi
