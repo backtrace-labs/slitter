@@ -53,6 +53,7 @@ pub struct ForeignClassConfig {
 /// Slitter stores internal information about configured classes with
 /// this Info struct.
 pub(crate) struct ClassInfo {
+    #[allow(dead_code)]
     pub name: Option<String>,
     pub layout: Layout,
 
@@ -69,6 +70,7 @@ pub(crate) struct ClassInfo {
     // Use this `Press` to allocate new objects.
     pub press: Press,
 
+    #[allow(dead_code)]
     pub id: Class,
 
     // Whether allocations should be zero-filled.
