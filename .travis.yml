@@ -1,0 +1,33 @@
+language: rust
+rust:
+  - 1.53.0
+  - stable
+  - beta
+  - nightly
+arch:
+  - amd64
+  - arm64
+
+jobs:
+  allow_failures:
+    - rust: nightly
+
+os: linux
+dist: bionic
+cache: cargo
+
+before_script: |
+  if [ "x$TRAVIS_RUST_VERSION" == xstable -a "x$TRAVIS_CPU_ARCH" == xamd64 ]; then
+    cargo install cargo-tarpaulin
+  fi
+
+script:
+- cargo clean
+- cargo build
+- PROPTEST_FORK=true cargo test --release
+- PROPTEST_FORK=true cargo test --release --no-default-features --features='c_fast_path'
+
+after_success: |
+  if [ "x$TRAVIS_RUST_VERSION" == xstable -a "x$TRAVIS_CPU_ARCH" == xamd64 ]; then
+    PROPTEST_FORK=true cargo tarpaulin --relese --features='test_only_small_constants' --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
+  fi
