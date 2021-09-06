@@ -108,9 +108,17 @@ thread_local!(static CACHE: RefCell<Cache> = RefCell::new(Cache::new()));
           "Sucessful allocations must have the allocation metadata set correctly.")]
 #[inline(always)]
 pub fn allocate(class: Class) -> Option<LinearRef> {
-    CACHE
-        .try_with(|cache| cache.borrow_mut().allocate(class))
-        .unwrap_or_else(|_| class.info().allocate_slow())
+    let result = if cfg!(feature = "c_fast_path") {
+        extern "C" {
+            fn slitter_allocate(class: Class) -> Option<LinearRef>;
+        }
+
+        Ok(unsafe { slitter_allocate(class) })
+    } else {
+        CACHE.try_with(|cache| cache.borrow_mut().allocate(class))
+    };
+
+    result.unwrap_or_else(|_| class.info().allocate_slow())
 }
 
 /// C-accessible slow path for the allocation.  The slow-path code is
@@ -146,13 +154,21 @@ pub extern "C" fn slitter__allocate_slow(class: Class) -> Option<LinearRef> {
 pub fn release(class: Class, block: LinearRef) {
     let mut cell = Some(block);
 
-    CACHE
-        .try_with(|cache| cache.borrow_mut().release(class, cell.take().unwrap()))
-        .unwrap_or_else(|_| {
-            if let Some(alloc) = cell {
-                class.info().release_slow(alloc)
-            }
-        })
+    let result = if cfg!(feature = "c_fast_path") {
+        extern "C" {
+            fn slitter_release(class: Class, block: LinearRef);
+        }
+
+        Ok(unsafe { slitter_release(class, cell.take().unwrap()) })
+    } else {
+        CACHE.try_with(|cache| cache.borrow_mut().release(class, cell.take().unwrap()))
+    };
+
+    result.unwrap_or_else(|_| {
+        if let Some(alloc) = cell {
+            class.info().release_slow(alloc)
+        }
+    });
 }
 
 /// C-accessible slow path for the allocation.  The slow-path code is
@@ -178,8 +194,7 @@ pub extern "C" fn slitter__release_slow(class: Class, block: LinearRef) {
 }
 
 impl Drop for Cache {
-    #[invariant(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
-    #[ensures(self.per_class_info.is_empty(), "The cache must be empty before dropping.")]
+    #[requires(self.check_rep_or_err().is_ok(), "Internal invariants hold.")]
     fn drop(&mut self) {
         unsafe {
             slitter__cache_register(std::ptr::null_mut(), 0);
@@ -253,7 +268,7 @@ impl Cache {
 
         #[cfg(not(feature = "c_fast_path"))]
         let (mags, is_owned) = {
-            let mags = [Magazines; INITIAL_CACHE_SIZE] = Default::default();
+            let mags: [Magazines; INITIAL_CACHE_SIZE] = Default::default();
 
             (Box::leak(Box::new(mags)), true)
         };

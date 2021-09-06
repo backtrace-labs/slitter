@@ -492,9 +492,9 @@ impl<'a> AllocatedChunk<'a> {
     }
 
     /// Releases any slop around the allocated memory.
-    #[invariant(debug_arange_map::is_metadata(self.meta as usize, METADATA_PAGE_SIZE).is_ok(),
+    #[requires(debug_arange_map::is_metadata(self.meta as usize, METADATA_PAGE_SIZE).is_ok(),
                "The metadata region is marked as such.")]
-    #[invariant(debug_arange_map::is_data(self.data as usize, DATA_ALIGNMENT).is_ok(),
+    #[requires(debug_arange_map::is_data(self.data as usize, DATA_ALIGNMENT).is_ok(),
                "The data region is marked as such.")]
     fn commit(self) -> Result<(), i32> {
         fn release(mapper: &dyn Mapper, begin: usize, end: usize) -> Result<(), i32> {
