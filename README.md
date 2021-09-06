@@ -1,5 +1,6 @@
 Slitter is a less footgunny slab allocator
 ==========================================
+[![Build Status](https://app.travis-ci.com/backtrace-labs/slitter.svg?branch=main)](https://app.travis-ci.com/backtrace-labs/slitter)
 
 Slitter is a classically structured thread-caching slab allocator
 that's meant to help write reliable long-running programs.
